@@ -1,0 +1,14 @@
+# dane wygenerowane w czasie pracy — nie wersjonujemy
+state.json
+history.json
+report.html
+wszystkie.html
+monitor.log
+no-cooldown.json
+public/index.html
+public/wszystkie.html
+
+# konfiguracja Vercela (identyfikatory projektu) i sekrety
+public/.vercel/
+.vercel/
+.env*
