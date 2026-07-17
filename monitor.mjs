@@ -1,6 +1,7 @@
-// Monitoring nowych ogłoszeń sprzedaży DZIAŁEK i DOMÓW w Żorach (OLX + Otodom).
-// Uruchamiany przez Harmonogram zadań Windows 2x dziennie. Bez zależności npm (Node 20+).
-// Nowe oferty => powiadomienie Windows (toast) + raport HTML (lokalnie i na Vercelu).
+// Monitoring nowych ogłoszeń sprzedaży DZIAŁEK i DOMÓW w Żorach (OLX + Otodom + N-O.pl).
+// Duble między portalami scalane (cena + metraż ±3%); uruchamiany przez Harmonogram
+// zadań Windows. Bez zależności npm (Node 20+). Testy: node --test.
+// Nowe oferty => powiadomienie Windows (toast) + push ntfy + raport HTML (lokalnie i na Vercelu).
 
 import fs from 'node:fs';
 import path from 'node:path';

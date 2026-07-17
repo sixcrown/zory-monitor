@@ -28,6 +28,20 @@ Raport jest też publikowany publicznie na Vercelu: **https://zory-dzialki.verce
 (deploy robi sam skrypt po każdej zmianie raportu; wymaga zalogowanego Vercel CLI
 i podlinkowanego projektu w `public/.vercel` — bez tego krok jest pomijany).
 
+## Deduplikacja i dodatki
+
+- Ta sama nieruchomość na kilku portalach jest scalana w jedną kartę
+  („Na portalach: OLX · Otodom · N-O.pl"); reguła: identyczna cena + metraż ±3%,
+  oferta kanoniczna wg priorytetu OLX > Otodom > N-O.pl. Dubel znanej oferty
+  nie wysyła powiadomienia; obniżka pushowana raz na grupę. Statystyki i mediany
+  liczone po scaleniu.
+- `archive.json` — oferty zniknięte ze wszystkich portali na ≥3 dni (sekcja
+  „zniknięte" na podstronie „wszystkie" + mediana dni do zniknięcia i końcowej ceny).
+- `trend.json` — dzienna mediana zł/m² z pełnych przebiegów (wykres na stronie
+  głównej, pojawia się od 5 dni pomiarów).
+- Podstrona „wszystkie": filtry ceny, metrażu, tytułu i dzielnicy + sortowanie.
+- Testy: `node --test` (logika dubli/zniknięć w `dedup.mjs`, render w `render.mjs`).
+
 ## Jak działa
 
 - Harmonogram zadań Windows uruchamia `run-monitor.vbs` (ukryte okno) **co godzinę 7:00–22:00**
@@ -47,6 +61,8 @@ i podlinkowanego projektu w `public/.vercel` — bez tego krok jest pomijany).
 | Plik | Rola |
 |---|---|
 | `monitor.mjs` | główny skrypt (Node 20+, bez zależności npm) |
+| `dedup.mjs` / `render.mjs` | logika dubli i zniknięć / renderowanie HTML (+ testy `*.test.mjs`) |
+| `archive.json` / `trend.json` | oferty zniknięte / dzienne mediany zł/m² |
 | `toast.ps1` | powiadomienie Windows |
 | `run-monitor.vbs` | ukryty launcher dla Harmonogramu zadań |
 | `sprawdz-teraz.cmd` | ręczne sprawdzenie (podwójny klik) |
