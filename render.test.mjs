@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderReport, renderCatalog, zl, esc } from './render.mjs';
+import { renderReport, renderCatalog, renderArchive, zl, esc } from './render.mjs';
 
 const CATS = {
   dzialki: { label: 'Działki', icon: '🌱', questions: ['pytanie 1'] },
@@ -31,6 +31,19 @@ test('renderCatalog: karta oferty z metadanymi', () => {
   const html = renderCatalog(CATS, { dzialki: [OFERTA], domy: [] }, STATS);
   assert.match(html, /data-ppm="230"/);
   assert.match(html, /~12 dni na rynku/);
+});
+
+test('renderArchive: mediany i wpis z 30 dni', () => {
+  const wczoraj = new Date(Date.now() - 864e5).toISOString();
+  const arch = [
+    { cat: 'dzialki', title: 'znikła', url: 'u', portal: 'OLX', lastPrice: 200000, areaM2: 1000, pricePerM2: 200, daysOnMarket: 40, disappearedAt: wczoraj },
+    { cat: 'dzialki', title: 'stara', url: 'u', portal: 'OLX', lastPrice: 100000, areaM2: 500, pricePerM2: 200, daysOnMarket: 60, disappearedAt: '2020-01-01T00:00:00Z' },
+  ];
+  const html = renderArchive(CATS, arch);
+  assert.match(html, /zniknięte w ost\. 30 dniach \(1\)/);
+  assert.match(html, /mediana dni do zniknięcia: <b>50<\/b>/);
+  assert.match(html, /znikła/);
+  assert.doesNotMatch(html, /🏠 Domy — zniknięte/);
 });
 
 test('renderCatalog: rządek Na portalach dla lustrzanek', () => {

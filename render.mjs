@@ -1,6 +1,8 @@
 // Renderowanie HTML raportu i katalogu — czyste funkcje string → string.
 // Wydzielone z monitor.mjs bez zmian logiki. Testy: render.test.mjs.
 
+import { median } from './dedup.mjs';
+
 export const zl = v => (v == null ? '?' : Number(v).toLocaleString('pl-PL') + ' zł');
 
 export function esc(s) {
@@ -103,8 +105,30 @@ ${cols}
 </body></html>`;
 }
 
+// Sekcja "zniknięte" katalogu: lista z 30 dni + mediany z całego archiwum.
+export function renderArchive(CATS, archive) {
+  const cut = Date.now() - 30 * 864e5;
+  return Object.entries(CATS).map(([cat, cfg]) => {
+    const all = archive.filter(a => a.cat === cat);
+    if (!all.length) return '';
+    const recent = all.filter(a => new Date(a.disappearedAt).getTime() >= cut);
+    const medDays = median(all.map(a => a.daysOnMarket).filter(v => v != null));
+    const medPpm = median(all.map(a => a.pricePerM2).filter(v => v > 0));
+    return `
+  <section>
+    <h2>${cfg.icon} ${esc(cfg.label)} — zniknięte w ost. 30 dniach (${recent.length})</h2>
+    <div class="stats">z całego archiwum (${all.length}): mediana dni do zniknięcia: <b>${medDays ?? '?'}</b>${medPpm ? ` · mediana końcowej ceny: <b>${medPpm} zł/m²</b>` : ''}</div>
+    ${recent.map(a => `
+    <div class="offer">
+      <a href="${esc(a.url)}" target="_blank">${esc(a.title)}</a>
+      <div class="meta">${esc(a.portal)} · ostatnia cena ${esc(zl(a.lastPrice))}${a.areaM2 ? ` · ${a.areaM2} m²` : ''}${a.daysOnMarket != null ? ` · ~${a.daysOnMarket} dni na rynku` : ''} · zniknęła ${esc(String(a.disappearedAt).slice(0, 10))}</div>
+    </div>`).join('')}
+  </section>`;
+  }).join('');
+}
+
 // Podstrona-katalog: WSZYSTKIE aktualne oferty, przeglądalne i sortowalne.
-export function renderCatalog(CATS, catalogByCat, statsByCat) {
+export function renderCatalog(CATS, catalogByCat, statsByCat, archive = []) {
   // krótka ocena względem mediany zł/m² (kompaktowa wersja do listy)
   const badge = (o, s) => {
     if (!o.pricePerM2 || !s?.medPpm) return '';
@@ -164,6 +188,7 @@ footer{margin-top:3rem;color:#888;font-size:.8rem}
 <h1>📋 Wszystkie aktualne oferty w Żorach (${total})</h1>
 <div class="updated">Stan na ${esc(new Date().toLocaleString('pl-PL'))} · OLX + Otodom + Nieruchomosci-online · <a href="index.html">← wróć do nowości i obniżek</a></div>
 ${secs}
+${renderArchive(CATS, archive)}
 <footer>Oceny liczone względem mediany zł/m² z bieżących ogłoszeń. „↓ x%" = łączna obniżka od pierwszej zapamiętanej ceny. Dni na rynku wg daty publikacji ogłoszenia.</footer>
 <script>
 function srt(cat, key, dir) {

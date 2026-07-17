@@ -22,6 +22,9 @@ const REPORT_URL = 'https://zory-dzialki.vercel.app';
 // temat ntfy.sh działa jak hasło — kto go zna, dostaje powiadomienia
 const NTFY_TOPIC = 'zory-okazje-kx83b2mq7f';
 const NO_COOLDOWN_FILE = path.join(DIR, 'no-cooldown.json');
+const ARCHIVE_FILE = path.join(DIR, 'archive.json');
+const TREND_FILE = path.join(DIR, 'trend.json');
+const readJson = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
 
 const CATS = {
   dzialki: {
@@ -539,6 +542,19 @@ for (const o of news) {
   o.notes = [...a.notes, ...(o.notes ?? [])];
 }
 
+// Zniknięcia: nieobecne ≥3 dni, poza awariami portali; żywy dubel = nie znikła.
+const archive = readJson(ARCHIVE_FILE, []);
+if (!firstRun) {
+  const { archived, gone } = detectDisappearances(state.seen, unique, failedSources, Date.now());
+  for (const id of gone) delete state.seen[id];
+  if (archived.length) {
+    archive.unshift(...archived);
+    archive.length = Math.min(archive.length, 500);
+    log(`Zniknięte oferty: ${archived.length} → archiwum (np. ${archived[0].title}).`);
+  }
+  fs.writeFileSync(ARCHIVE_FILE, JSON.stringify(archive, null, 1));
+}
+
 // przytnij stan, żeby nie rósł w nieskończoność
 const entries = Object.entries(state.seen);
 if (entries.length > 6000) {
@@ -577,7 +593,7 @@ fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 1));
 
 // raport i katalog renderujemy i publikujemy co przebieg — statystyki mają być aktualne
 fs.writeFileSync(REPORT_FILE, renderReport(CATS, history, statsByCat, negoByCat));
-fs.writeFileSync(CATALOG_FILE, renderCatalog(CATS, catalogByCat, statsByCat));
+fs.writeFileSync(CATALOG_FILE, renderCatalog(CATS, catalogByCat, statsByCat, archive));
 await deployReport();
 
 if (firstRun) {
