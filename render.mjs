@@ -173,6 +173,9 @@ export function renderArchive(CATS, archive) {
   }).join('');
 }
 
+// Znane dzielnice/sołectwa Żor — do filtra lokalizacji na podstronie katalogu.
+const DISTRICTS = ['Baranowice', 'Kleszczów', 'Kleszczówka', 'Osiny', 'Rogoźna', 'Rowień', 'Folwarki', 'Rój', 'Śródmieście'];
+
 // Podstrona-katalog: WSZYSTKIE aktualne oferty, przeglądalne i sortowalne.
 export function renderCatalog(CATS, catalogByCat, statsByCat, archive = []) {
   // krótka ocena względem mediany zł/m² (kompaktowa wersja do listy)
@@ -191,7 +194,7 @@ export function renderCatalog(CATS, catalogByCat, statsByCat, archive = []) {
     const items = [...(catalogByCat[cat] ?? [])].sort((a, b) => (a.pricePerM2 ?? Infinity) - (b.pricePerM2 ?? Infinity));
     return `
   <section>
-    <h2>${cfg.icon} ${esc(cfg.label)} (${items.length})</h2>
+    <h2>${cfg.icon} ${esc(cfg.label)} (<span class="viscount">${items.length}</span>)</h2>
     ${s ? `<div class="stats">
       <div>mediana ceny: <b>${esc(zl(s.medPrice))}</b> · mediana: <b>${s.medPpm} zł/m²</b> (zakres ${s.minPpm}–${s.maxPpm}) · mediana powierzchni: <b>${s.medArea} m²</b></div>
     </div>` : ''}
@@ -203,7 +206,7 @@ export function renderCatalog(CATS, catalogByCat, statsByCat, archive = []) {
     </div>
     <div id="list-${cat}">
       ${items.map(o => `
-      <div class="offer" data-ppm="${o.pricePerM2 ?? ''}" data-price="${o.price ?? ''}" data-area="${o.areaM2 ?? ''}" data-days="${o.dom ?? ''}">
+      <div class="offer" data-ppm="${o.pricePerM2 ?? ''}" data-price="${o.price ?? ''}" data-area="${o.areaM2 ?? ''}" data-days="${o.dom ?? ''}" data-title="${esc(o.title.toLowerCase())}" data-loc="${esc(((o.place ?? '') + ' ' + o.title).toLowerCase())}">
         <a href="${esc(o.url)}" target="_blank"><strong>${esc(o.title)}</strong></a>
         <div class="meta">${esc(o.portal)} · ${esc(o.priceText)}${o.areaM2 ? ` · ${o.areaM2} m²` : ''}${o.pricePerM2 ? ` · ${o.pricePerM2} zł/m²` : ''}${o.place ? ` · ${esc(o.place)}` : ''}${o.dom != null ? ` · ~${o.dom} dni na rynku` : ''}${o.dropPct ? ` · <span class="dr">↓ ${o.dropPct}%</span>` : ''} ${badge(o, s)}</div>
         ${o.mirrors?.length ? `<div class="mirrors">Na portalach: <a href="${esc(o.url)}" target="_blank">${esc(o.portal)}</a>${o.mirrors.map(m => ` · <a href="${esc(m.url)}" target="_blank">${esc(m.portal)}</a>`).join('')}</div>` : ''}
@@ -222,6 +225,10 @@ h1{font-size:1.4rem} h2{font-size:1.15rem;margin:1.8rem 0 .5rem}
 .sorts{margin:.6rem 0;font-size:.85rem;color:#555}
 .sorts button{margin:0 .2rem;padding:.2rem .6rem;font-size:.8rem;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer}
 .sorts button:hover{background:#eef3fb}
+.filters{display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:center;background:#f3f6f9;border-radius:8px;padding:.55rem .8rem;font-size:.85rem;color:#555;margin-bottom:.6rem}
+.filters input,.filters select{padding:.25rem .45rem;border:1px solid #ccc;border-radius:6px;font-size:.85rem}
+.filters input[type=number]{width:5.4rem} .filters input[type=search]{width:11rem}
+.filters button{padding:.25rem .7rem;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer}
 .offer{margin:.7rem 0;padding-bottom:.5rem;border-bottom:1px solid #f0f0f0}
 .offer a{color:#0b57d0;text-decoration:none} .offer a:hover{text-decoration:underline}
 .meta{color:#555;font-size:.87rem;margin-top:.15rem}
@@ -233,6 +240,13 @@ footer{margin-top:3rem;color:#888;font-size:.8rem}
 </style></head><body>
 <h1>📋 Wszystkie aktualne oferty w Żorach (${total})</h1>
 <div class="updated">Stan na ${esc(new Date().toLocaleString('pl-PL'))} · OLX + Otodom + Nieruchomosci-online · <a href="index.html">← wróć do nowości i obniżek</a></div>
+<div class="filters">
+  <input id="f-q" type="search" placeholder="szukaj w tytule…">
+  <span>cena <input id="f-pmin" type="number" placeholder="od"> – <input id="f-pmax" type="number" placeholder="do"> zł</span>
+  <span>metraż <input id="f-amin" type="number" placeholder="od"> – <input id="f-amax" type="number" placeholder="do"> m²</span>
+  <select id="f-d"><option value="">dzielnica: wszystkie</option>${DISTRICTS.map(d => `<option value="${d.toLowerCase()}">${d}</option>`).join('')}</select>
+  <button id="f-x">wyczyść</button>
+</div>
 ${secs}
 ${renderArchive(CATS, archive)}
 <footer>Oceny liczone względem mediany zł/m² z bieżących ogłoszeń. „↓ x%" = łączna obniżka od pierwszej zapamiętanej ceny. Dni na rynku wg daty publikacji ogłoszenia.</footer>
@@ -247,6 +261,26 @@ function srt(cat, key, dir) {
     return dir * (va - vb);
   }).forEach(function (el) { box.appendChild(el); });
 }
+const F = ['f-q', 'f-pmin', 'f-pmax', 'f-amin', 'f-amax', 'f-d'].map(function (id) { return document.getElementById(id); });
+function applyFilters() {
+  const q = F[0].value.trim().toLowerCase(), pmin = +F[1].value, pmax = +F[2].value,
+        amin = +F[3].value, amax = +F[4].value, d = F[5].value;
+  document.querySelectorAll('[id^="list-"] .offer').forEach(function (el) {
+    const price = parseFloat(el.dataset.price), area = parseFloat(el.dataset.area);
+    const ok = (!q || (el.dataset.title || '').includes(q))
+      && (!pmin || price >= pmin) && (!pmax || price <= pmax)
+      && (!amin || area >= amin) && (!amax || area <= amax)
+      && (!d || (el.dataset.loc || '').includes(d));
+    el.style.display = ok ? '' : 'none';
+  });
+  document.querySelectorAll('[id^="list-"]').forEach(function (box) {
+    const n = Array.prototype.filter.call(box.querySelectorAll('.offer'), function (e) { return e.style.display !== 'none'; }).length;
+    const c = box.closest('section').querySelector('.viscount');
+    if (c) c.textContent = n;
+  });
+}
+F.forEach(function (el) { el.addEventListener('input', applyFilters); });
+document.getElementById('f-x').addEventListener('click', function () { F.forEach(function (el) { el.value = ''; }); applyFilters(); });
 </script>
 </body></html>`;
 }

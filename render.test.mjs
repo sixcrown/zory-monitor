@@ -62,6 +62,15 @@ test('renderArchive: mediany i wpis z 30 dni', () => {
   assert.doesNotMatch(html, /🏠 Domy — zniknięte/);
 });
 
+test('renderCatalog: pasek filtrów i atrybuty data-title/data-loc', () => {
+  const html = renderCatalog(CATS, { dzialki: [OFERTA], domy: [] }, STATS);
+  assert.match(html, /id="f-q"/);
+  assert.match(html, /value="rogoźna"/);
+  assert.match(html, /data-title="działka rogoźna &lt;test&gt;"/);
+  assert.match(html, /data-loc="żory – rogoźna działka rogoźna &lt;test&gt;"/);
+  assert.match(html, /class="viscount"/);
+});
+
 test('renderCatalog: rządek Na portalach dla lustrzanek', () => {
   const o = { ...OFERTA, mirrors: [{ portal: 'N-O.pl', url: 'https://n-o.pl/y' }] };
   const html = renderCatalog(CATS, { dzialki: [o], domy: [] }, STATS);
