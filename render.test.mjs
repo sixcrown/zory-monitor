@@ -32,3 +32,10 @@ test('renderCatalog: karta oferty z metadanymi', () => {
   assert.match(html, /data-ppm="230"/);
   assert.match(html, /~12 dni na rynku/);
 });
+
+test('renderCatalog: rządek Na portalach dla lustrzanek', () => {
+  const o = { ...OFERTA, mirrors: [{ portal: 'N-O.pl', url: 'https://n-o.pl/y' }] };
+  const html = renderCatalog(CATS, { dzialki: [o], domy: [] }, STATS);
+  assert.match(html, /Na portalach:/);
+  assert.match(html, /https:\/\/n-o\.pl\/y/);
+});

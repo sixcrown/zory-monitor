@@ -7,6 +7,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { renderReport, renderCatalog, zl } from './render.mjs';
+import { groupOffers, median, detectDisappearances } from './dedup.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const STATE_FILE = path.join(DIR, 'state.json');
@@ -307,13 +308,6 @@ function analyzeOffer(o, corpus) {
 
 // ---- statystyki i ocena ofert ----
 
-function median(arr) {
-  if (!arr.length) return null;
-  const s = [...arr].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
-}
-
 function calcStats(offers) {
   const prices = offers.map(o => o.price).filter(v => v > 0);
   const ppms = offers.map(o => o.pricePerM2).filter(v => v > 0);
@@ -415,17 +409,21 @@ function queuedGetNO(cat, url) {
 }
 
 const jobs = Object.entries(CATS).flatMap(([cat, cfg]) => [
-  getOlx(cat, cfg.olx).catch(e => { throw new Error(`${cfg.label}/${e.message}`); }),
-  getOtodom(cat, cfg.otodom).catch(e => { throw new Error(`${cfg.label}/${e.message}`); }),
-  queuedGetNO(cat, cfg.no).catch(e => { throw new Error(`${cfg.label}/N-O.pl: ${e.message}`); }),
+  { portal: 'OLX', cat, p: getOlx(cat, cfg.olx) },
+  { portal: 'Otodom', cat, p: getOtodom(cat, cfg.otodom) },
+  { portal: 'N-O.pl', cat, p: queuedGetNO(cat, cfg.no) },
 ]);
-const results = await Promise.allSettled(jobs);
+const results = await Promise.allSettled(jobs.map(j => j.p));
 const offers = [];
 const errors = [];
-for (const r of results) {
+const failedSources = new Set(); // "OLX|dzialki" — do ochrony zniknięć i trendu
+results.forEach((r, i) => {
   if (r.status === 'fulfilled') offers.push(...r.value);
-  else errors.push(r.reason.message);
-}
+  else {
+    failedSources.add(jobs[i].portal + '|' + jobs[i].cat);
+    errors.push(`${CATS[jobs[i].cat].label}/${jobs[i].portal}: ${r.reason.message}`);
+  }
+});
 if (errors.length) log('UWAGA, częściowa awaria: ' + errors.join(' | '));
 
 if (!offers.length) {
@@ -440,11 +438,19 @@ const state = firstRun ? { seen: {} } : JSON.parse(fs.readFileSync(STATE_FILE, '
 const now = new Date().toISOString();
 
 const unique = [...new Map(offers.map(o => [o.id, o])).values()];
+
+// Grupy dubli: ta sama nieruchomość na kilku portalach. Kanoniczna oferta
+// reprezentuje grupę wszędzie dalej (statystyki, raport, powiadomienia).
+const preKnown = new Set(Object.keys(state.seen)); // znane PRZED tym przebiegiem
+const groups = groupOffers(unique);
+const groupOf = new Map(groups.flatMap(g => g.map(o => [o.id, g])));
+const deduped = groups.map(g => Object.assign(g[0], { mirrors: g.slice(1).map(m => ({ portal: m.portal, url: m.url })) }));
+
 const fresh = unique.filter(o => !state.seen[o.id]);
 for (const o of fresh) {
   state.seen[o.id] = {
     firstSeen: now, lastSeen: now, title: o.title, url: o.url, cat: o.cat,
-    portal: o.portal, created: o.created,
+    portal: o.portal, created: o.created, areaM2: o.areaM2 ?? null, place: o.place ?? '',
     priceHistory: o.price ? [{ at: now, price: o.price }] : [],
   };
 }
@@ -456,6 +462,7 @@ for (const o of unique) {
   if (!rec || rec.firstSeen === now) continue;
   rec.lastSeen = now;
   rec.url ??= o.url; rec.cat ??= o.cat; rec.portal ??= o.portal; rec.created ??= o.created;
+  rec.areaM2 ??= o.areaM2 ?? null; rec.place ??= o.place ?? '';
   rec.priceHistory ??= (o.price ? [{ at: rec.firstSeen, price: o.price }] : []);
   const last = rec.priceHistory.at(-1);
   if (o.price && last && o.price !== last.price) {
@@ -467,6 +474,15 @@ for (const o of unique) {
     rec.priceHistory.push({ at: now, price: o.price });
   }
 }
+
+// Agencja obniża cenę na każdym portalu — pushujemy raz, z najniższą nową ceną.
+const dropByGroup = new Map();
+for (const d of drops) {
+  const key = (groupOf.get(d.id) ?? [d])[0].id;
+  const prev = dropByGroup.get(key);
+  if (!prev || d.newPrice < prev.newPrice) dropByGroup.set(key, d);
+}
+const uniqueDrops = [...dropByGroup.values()];
 
 // bezpiecznik: portal wracający po awarii/throttlingu wysypuje naraz całą swoją pulę
 // jako "nowe" — traktujemy to jak cichy baseline źródła, nie jak lawinę nowości
@@ -483,7 +499,14 @@ if (!firstRun) {
     }
   }
 }
-const news = fresh.filter(o => !flooded.has(o.portal + '|' + o.cat));
+// Pushuje tylko kanoniczna świeżej grupy i tylko gdy żaden inny wpis grupy nie
+// był znany wcześniej — dubel znanej oferty dokleja się cicho jako link.
+const news = fresh.filter(o => {
+  if (flooded.has(o.portal + '|' + o.cat)) return false;
+  const g = groupOf.get(o.id);
+  if (g[0] !== o) return false;
+  return !g.some(m => m !== o && preKnown.has(m.id));
+});
 
 // media/udogodnienia z treści ogłoszenia; Otodom i N-O.pl wymagają dociągnięcia strony
 // oferty (N-O.pl przy okazji uzupełnia datę publikacji, której nie ma na liście)
@@ -507,7 +530,7 @@ for (const o of news) {
 // statystyki rynku per kategoria + ocena każdej nowej oferty
 const statsByCat = {};
 for (const cat of Object.keys(CATS)) {
-  const catOffers = unique.filter(o => o.cat === cat);
+  const catOffers = deduped.filter(o => o.cat === cat);
   statsByCat[cat] = catOffers.length ? calcStats(catOffers) : null;
 }
 for (const o of news) {
@@ -524,7 +547,7 @@ if (entries.length > 6000) {
 }
 fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 1));
 
-const perCat = cat => unique.filter(o => o.cat === cat).length;
+const perCat = cat => deduped.filter(o => o.cat === cat).length;
 const counts = Object.entries(CATS).map(([cat, cfg]) => `${cfg.label}: ${perCat(cat)}`).join(', ');
 
 // pełny katalog aktualnych ofert (z dniami na rynku i łączną obniżką) — dla podstrony
@@ -533,7 +556,7 @@ const daysOn = c => (c ? Math.floor((Date.now() - new Date(c).getTime()) / 864e5
 const catalogByCat = {};
 const negoByCat = {};
 for (const cat of Object.keys(CATS)) {
-  catalogByCat[cat] = unique.filter(o => o.cat === cat).map(o => {
+  catalogByCat[cat] = deduped.filter(o => o.cat === cat).map(o => {
     const rec = state.seen[o.id] ?? {};
     const first = rec.priceHistory?.[0]?.price;
     const dropPct = first && o.price && o.price < first ? Math.round((1 - o.price / first) * 100) : 0;
@@ -546,8 +569,8 @@ for (const cat of Object.keys(CATS)) {
 }
 
 const history = !firstRun && fs.existsSync(HISTORY_FILE) ? JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) : [];
-if (!firstRun && (news.length || drops.length)) {
-  history.unshift({ at: now, offers: news, drops });
+if (!firstRun && (news.length || uniqueDrops.length)) {
+  history.unshift({ at: now, offers: news, drops: uniqueDrops });
   history.length = Math.min(history.length, 100);
 }
 fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 1));
@@ -559,23 +582,23 @@ await deployReport();
 
 if (firstRun) {
   log(`Pierwsze uruchomienie: zapamiętano ${unique.length} istniejących ofert (${counts}). Bez powiadomienia.`);
-} else if (news.length || drops.length) {
+} else if (news.length || uniqueDrops.length) {
   const parts = Object.entries(CATS)
     .map(([cat, cfg]) => [cfg.label, news.filter(o => o.cat === cat).length])
     .filter(([, n]) => n > 0)
     .map(([l, n]) => `${n} × ${l.toLowerCase().replace(/y$/, '')}`);
-  if (drops.length) parts.push(`${drops.length} × obniżka`);
+  if (uniqueDrops.length) parts.push(`${uniqueDrops.length} × obniżka`);
   const title = `Żory: ${parts.join(', ')}`;
   const lines = [
     ...news.slice(0, 4).map(o => `• ${o.title} — ${o.priceText}${o.verdict ? ' ' + o.verdict.slice(0, 2) : ''}${o.maybeRefresh ? ` ♻ odświeżona${o.refreshed ? ' ' + String(o.refreshed).slice(0, 10) : ''}` : ''}`),
-    ...drops.slice(0, 3).map(d => `↓ ${d.title}: ${zl(d.oldPrice)} → ${zl(d.newPrice)} (-${d.dropPct}%)`),
+    ...uniqueDrops.slice(0, 3).map(d => `↓ ${d.title}: ${zl(d.oldPrice)} → ${zl(d.newPrice)} (-${d.dropPct}%)`),
   ];
-  const extra = news.length + drops.length - lines.length;
+  const extra = news.length + uniqueDrops.length - lines.length;
   const body = (lines.join('\n') + (extra > 0 ? `\n(+${extra} więcej)` : '')).slice(0, 400);
-  const hot = news.some(o => o.verdict?.startsWith('🟢')) || drops.some(d => d.dropPct >= 10);
+  const hot = news.some(o => o.verdict?.startsWith('🟢')) || uniqueDrops.some(d => d.dropPct >= 10);
   await showToast(title, body.replace(/\n/g, '  ·  '));
   await sendNtfy(title, body, hot ? 4 : 3);
-  log(`NOWE: ${news.length}, OBNIŻKI: ${drops.length} (${counts})`);
+  log(`NOWE: ${news.length}, OBNIŻKI: ${uniqueDrops.length} (${counts})`);
 } else {
   log(`Nic nowego (${counts}, w bazie ${Object.keys(state.seen).length} ofert).`);
 }

@@ -12,6 +12,7 @@ function renderOffer(o) {
       <div class="offer">
         <a href="${esc(o.url)}" target="_blank"><strong>${esc(o.title)}</strong></a>
         <div class="meta">${esc(o.portal)} · ${esc(o.priceText)}${o.areaM2 ? ` · ${o.areaM2} m²` : ''}${o.pricePerM2 ? ` · ${o.pricePerM2} zł/m²` : ''}${o.plotM2 ? ` · działka ${o.plotM2} m²` : ''}${o.kind ? ` · ${esc(o.kind)}` : ''}${o.place ? ` · ${esc(o.place)}` : ''}${o.created ? ` · dodano ${esc(String(o.created).slice(0, 16).replace('T', ' '))}` : ''}${o.maybeRefresh && o.refreshed ? ` · odświeżona ${esc(String(o.refreshed).slice(0, 10))}` : ''}</div>
+        ${o.mirrors?.length ? `<div class="mirrors">Na portalach: <a href="${esc(o.url)}" target="_blank">${esc(o.portal)}</a>${o.mirrors.map(m => ` · <a href="${esc(m.url)}" target="_blank">${esc(m.portal)}</a>`).join('')}</div>` : ''}
         ${o.verdict ? `<div class="verdict">${esc(o.verdict)}</div>` : ''}
         ${o.featHave?.length ? `<div class="feat">Z ogłoszenia: ${esc(o.featHave.join(' · '))}</div>` : ''}
         ${o.featMissing?.length ? `<div class="featmiss">Brak wzmianki o: ${esc(o.featMissing.join(', '))}</div>` : ''}
@@ -82,6 +83,8 @@ details{margin-top:.7rem;font-size:.9rem} details summary{cursor:pointer;color:#
 details ul{margin:.4rem 0 .2rem;padding-left:1.2rem} details li{margin:.25rem 0}
 .offer{margin:.8rem 0} .offer a{color:#0b57d0;text-decoration:none} .offer a:hover{text-decoration:underline}
 .meta{color:#555;font-size:.88rem;margin-top:.15rem}
+.mirrors{font-size:.85rem;color:#555;margin-top:.15rem}
+.mirrors a{color:#0b57d0;text-decoration:none}
 .verdict{font-size:.9rem;font-weight:600;margin-top:.2rem}
 .feat{font-size:.85rem;color:#1a6b2f;margin-top:.15rem}
 .featmiss{font-size:.85rem;color:#8a5a00;margin-top:.1rem}
@@ -133,6 +136,7 @@ export function renderCatalog(CATS, catalogByCat, statsByCat) {
       <div class="offer" data-ppm="${o.pricePerM2 ?? ''}" data-price="${o.price ?? ''}" data-area="${o.areaM2 ?? ''}" data-days="${o.dom ?? ''}">
         <a href="${esc(o.url)}" target="_blank"><strong>${esc(o.title)}</strong></a>
         <div class="meta">${esc(o.portal)} · ${esc(o.priceText)}${o.areaM2 ? ` · ${o.areaM2} m²` : ''}${o.pricePerM2 ? ` · ${o.pricePerM2} zł/m²` : ''}${o.place ? ` · ${esc(o.place)}` : ''}${o.dom != null ? ` · ~${o.dom} dni na rynku` : ''}${o.dropPct ? ` · <span class="dr">↓ ${o.dropPct}%</span>` : ''} ${badge(o, s)}</div>
+        ${o.mirrors?.length ? `<div class="mirrors">Na portalach: <a href="${esc(o.url)}" target="_blank">${esc(o.portal)}</a>${o.mirrors.map(m => ` · <a href="${esc(m.url)}" target="_blank">${esc(m.portal)}</a>`).join('')}</div>` : ''}
       </div>`).join('')}
     </div>
   </section>`;
@@ -151,6 +155,8 @@ h1{font-size:1.4rem} h2{font-size:1.15rem;margin:1.8rem 0 .5rem}
 .offer{margin:.7rem 0;padding-bottom:.5rem;border-bottom:1px solid #f0f0f0}
 .offer a{color:#0b57d0;text-decoration:none} .offer a:hover{text-decoration:underline}
 .meta{color:#555;font-size:.87rem;margin-top:.15rem}
+.mirrors{font-size:.85rem;color:#555;margin-top:.15rem}
+.mirrors a{color:#0b57d0;text-decoration:none}
 .dr{color:#1a6b2f;font-weight:600}
 .b-ok{color:#1a6b2f;font-weight:600} .b-mid{color:#888} .b-hi{color:#b3261e}
 footer{margin-top:3rem;color:#888;font-size:.8rem}
