@@ -33,3 +33,26 @@ export function groupOffers(offers) {
   }
   return groups;
 }
+
+// Oferta "znika" po graceDays nieobecności, o ile jej portal nie zawiódł w tym
+// przebiegu. Jeśli żywa oferta wygląda na tę samą nieruchomość (dubel), rekord
+// zdejmujemy ze stanu bez archiwizacji — nieruchomość wciąż wisi gdzie indziej.
+export function detectDisappearances(seen, liveOffers, failedSources, nowMs, graceDays = 3) {
+  const archived = [];
+  const gone = [];
+  for (const [id, rec] of Object.entries(seen)) {
+    if (nowMs - new Date(rec.lastSeen).getTime() < graceDays * 864e5) continue;
+    if (failedSources.has(rec.portal + '|' + rec.cat)) continue;
+    gone.push(id);
+    const lastPrice = rec.priceHistory?.at(-1)?.price ?? null;
+    if (liveOffers.some(o => isDuplicate(o, { cat: rec.cat, price: lastPrice, areaM2: rec.areaM2 }))) continue;
+    archived.push({
+      id, title: rec.title, url: rec.url, portal: rec.portal, cat: rec.cat,
+      lastPrice, areaM2: rec.areaM2 ?? null,
+      pricePerM2: lastPrice && rec.areaM2 ? Math.round(lastPrice / rec.areaM2) : null,
+      firstSeen: rec.firstSeen, disappearedAt: rec.lastSeen,
+      daysOnMarket: Math.max(0, Math.round((new Date(rec.lastSeen) - new Date(rec.created ?? rec.firstSeen)) / 864e5)),
+    });
+  }
+  return { archived, gone };
+}
