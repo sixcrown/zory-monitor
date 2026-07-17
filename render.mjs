@@ -22,6 +22,34 @@ function renderOffer(o) {
       </div>`;
 }
 
+// Wykres trendu mediany zł/m²: jedna seria (bez legendy), linia 2px, siatka
+// wycofana, etykieta tylko przy ostatnim punkcie, tooltip (cele 9px), tabelka
+// danych w <details> jako dostępny fallback.
+export function renderTrendChart(cat, points) {
+  if (points.length < 5) return '';
+  const W = 460, H = 150, P = { l: 46, r: 64, t: 10, b: 22 };
+  const vals = points.map(p => p.medPpm);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const span = Math.max(hi - lo, Math.round(hi * 0.02) || 1); // płaska seria ≠ dzielenie przez zero
+  const x = i => Math.round(P.l + i * (W - P.l - P.r) / (points.length - 1));
+  const y = v => Math.round(P.t + (H - P.t - P.b) * (1 - (v - lo) / span));
+  const grid = [lo, lo + span / 2, lo + span];
+  return `
+    <figure class="trend" data-cat="${cat}">
+      <figcaption>Mediana zł/m² w czasie (${points.length} dni pomiarów)</figcaption>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend mediany zł/m²">
+        ${grid.map(v => `<line x1="${P.l}" y1="${y(v)}" x2="${W - P.r}" y2="${y(v)}" stroke="#eee"/><text x="${P.l - 6}" y="${y(v) + 3}" text-anchor="end" class="ax">${Math.round(v)}</text>`).join('')}
+        <polyline points="${points.map((p, i) => `${x(i)},${y(p.medPpm)}`).join(' ')}" fill="none" stroke="#0b57d0" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="${x(points.length - 1)}" cy="${y(vals.at(-1))}" r="3" fill="#0b57d0"/>
+        <text x="${x(points.length - 1) + 8}" y="${y(vals.at(-1)) + 3}" class="last">${vals.at(-1)} zł/m²</text>
+        <text x="${P.l}" y="${H - 6}" class="ax">${points[0].date}</text>
+        <text x="${W - P.r}" y="${H - 6}" text-anchor="end" class="ax">${points.at(-1).date}</text>
+        ${points.map((p, i) => `<circle class="pt" cx="${x(i)}" cy="${y(p.medPpm)}" r="9" fill="transparent" data-tip="${p.date}: ${p.medPpm} zł/m² (ofert: ${p.count})"/>`).join('')}
+      </svg>
+      <details><summary>dane wykresu</summary><table class="trendtab">${points.map(p => `<tr><td>${p.date}</td><td>${p.medPpm} zł/m²</td><td>${p.count} ofert</td></tr>`).join('')}</table></details>
+    </figure>`;
+}
+
 function renderDrop(d) {
   return `
       <div class="offer">
@@ -30,7 +58,7 @@ function renderDrop(d) {
       </div>`;
 }
 
-export function renderReport(CATS, history, statsByCat, negoByCat) {
+export function renderReport(CATS, history, statsByCat, negoByCat, trend = []) {
   const cols = Object.entries(CATS).map(([cat, cfg]) => {
     const s = statsByCat[cat];
     const nego = negoByCat?.[cat] ?? [];
@@ -50,6 +78,7 @@ export function renderReport(CATS, history, statsByCat, negoByCat) {
       ${s.medPpm ? `<div>mediana ceny za m²: <b>${s.medPpm} zł/m²</b> (zakres ${s.minPpm}–${s.maxPpm})</div>` : ''}
       ${s.medArea ? `<div>mediana powierzchni: <b>${s.medArea} m²</b></div>` : ''}
     </div>` : '<div class="stats">brak danych (portal niedostępny w tym przebiegu)</div>'}
+    ${renderTrendChart(cat, trend.filter(t => t.cat === cat))}
     ${nego.length ? `<details class="nego"><summary>🤝 Do negocjacji: ${nego.length} — długo na rynku / po obniżkach</summary>
       ${nego.map(o => `
       <div class="offer">
@@ -94,6 +123,10 @@ details ul{margin:.4rem 0 .2rem;padding-left:1.2rem} details li{margin:.25rem 0}
 .nego summary{color:#7a4d00}
 .notes{margin:.25rem 0 0;padding-left:1.2rem;font-size:.85rem;color:#8a5a00} .notes li{margin:.15rem 0}
 .empty{color:#888;font-size:.9rem}
+.trend{margin:.8rem 0 0} .trend figcaption{font-size:.85rem;color:#555;margin-bottom:.2rem}
+.trend svg{width:100%;height:auto} .trend .ax{font-size:10px;fill:#777} .trend .last{font-size:11px;font-weight:600;fill:#222}
+.trend details{margin-top:.2rem} .trendtab td{padding:.1rem .6rem .1rem 0;font-size:.8rem;color:#555}
+#tip{position:absolute;background:#222;color:#fff;padding:.2rem .5rem;border-radius:5px;font-size:.78rem;pointer-events:none;white-space:nowrap}
 footer{margin-top:3rem;color:#888;font-size:.8rem;line-height:1.5}
 </style></head><body>
 <h1>🏡 Nieruchomości w Żorach — monitor</h1>
@@ -102,6 +135,19 @@ footer{margin-top:3rem;color:#888;font-size:.8rem;line-height:1.5}
 ${cols}
 </div>
 <footer>Oceny „okazja / powyżej mediany" i ostrzeżenia to automatyczne heurystyki liczone względem mediany zł/m² z bieżących ogłoszeń w Żorach — pomagają ustalić priorytety, ale nie zastępują weryfikacji oferty. Generowane automatycznie przez zory-monitor.</footer>
+<div id="tip" hidden></div>
+<script>
+document.addEventListener('mouseover', function (e) {
+  const tip = document.getElementById('tip');
+  if (e.target.classList && e.target.classList.contains('pt')) {
+    tip.textContent = e.target.dataset.tip;
+    const r = e.target.getBoundingClientRect();
+    tip.style.left = (r.left + window.scrollX + 12) + 'px';
+    tip.style.top = (r.top + window.scrollY - 26) + 'px';
+    tip.hidden = false;
+  } else if (!tip.hidden) tip.hidden = true;
+});
+</script>
 </body></html>`;
 }
 

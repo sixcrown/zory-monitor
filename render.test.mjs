@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderReport, renderCatalog, renderArchive, zl, esc } from './render.mjs';
+import { renderReport, renderCatalog, renderArchive, renderTrendChart, zl, esc } from './render.mjs';
 
 const CATS = {
   dzialki: { label: 'Działki', icon: '🌱', questions: ['pytanie 1'] },
@@ -31,6 +31,22 @@ test('renderCatalog: karta oferty z metadanymi', () => {
   const html = renderCatalog(CATS, { dzialki: [OFERTA], domy: [] }, STATS);
   assert.match(html, /data-ppm="230"/);
   assert.match(html, /~12 dni na rynku/);
+});
+
+test('renderTrendChart: pusty <5 punktów, polyline i etykieta ostatniej wartości ≥5', () => {
+  const pt = (i, v) => ({ date: `2026-07-0${i}`, cat: 'dzialki', medPpm: v, count: 10 + i });
+  assert.equal(renderTrendChart('dzialki', [1, 2, 3, 4].map(i => pt(i, 200))), '');
+  const svg = renderTrendChart('dzialki', [pt(1, 180), pt(2, 190), pt(3, 200), pt(4, 195), pt(5, 210)]);
+  assert.match(svg, /<polyline points="/);
+  assert.match(svg, /210 zł\/m²/);          // etykieta tylko ostatniego punktu
+  assert.match(svg, /2026-07-01/);
+  assert.match(svg, /data-tip="2026-07-03: 200 zł\/m² \(ofert: 13\)"/);
+  assert.match(svg, /<table class="trendtab">/);
+});
+
+test('renderTrendChart: płaska seria nie dzieli przez zero', () => {
+  const pts = [1, 2, 3, 4, 5].map(i => ({ date: `2026-07-0${i}`, cat: 'domy', medPpm: 5000, count: 8 }));
+  assert.doesNotMatch(renderTrendChart('domy', pts), /NaN/);
 });
 
 test('renderArchive: mediany i wpis z 30 dni', () => {

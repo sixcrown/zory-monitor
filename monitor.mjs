@@ -542,6 +542,21 @@ for (const o of news) {
   o.notes = [...a.notes, ...(o.notes ?? [])];
 }
 
+// Punkt trendu tylko z pełnych przebiegów — częściowe dane skrzywiłyby medianę.
+const trend = readJson(TREND_FILE, []);
+if (!errors.length) {
+  const today = now.slice(0, 10);
+  for (const cat of Object.keys(CATS)) {
+    const s = statsByCat[cat];
+    if (!s?.medPpm) continue;
+    const point = { date: today, cat, medPpm: s.medPpm, count: s.count };
+    const i = trend.findIndex(t => t.date === today && t.cat === cat);
+    if (i >= 0) trend[i] = point; else trend.push(point);
+  }
+  if (trend.length > 1500) trend.splice(0, trend.length - 1500);
+  fs.writeFileSync(TREND_FILE, JSON.stringify(trend));
+}
+
 // Zniknięcia: nieobecne ≥3 dni, poza awariami portali; żywy dubel = nie znikła.
 const archive = readJson(ARCHIVE_FILE, []);
 if (!firstRun) {
@@ -592,7 +607,7 @@ if (!firstRun && (news.length || uniqueDrops.length)) {
 fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 1));
 
 // raport i katalog renderujemy i publikujemy co przebieg — statystyki mają być aktualne
-fs.writeFileSync(REPORT_FILE, renderReport(CATS, history, statsByCat, negoByCat));
+fs.writeFileSync(REPORT_FILE, renderReport(CATS, history, statsByCat, negoByCat, trend));
 fs.writeFileSync(CATALOG_FILE, renderCatalog(CATS, catalogByCat, statsByCat, archive));
 await deployReport();
 
