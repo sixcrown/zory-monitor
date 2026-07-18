@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { median, areaClose, isDuplicate, groupOffers, detectDisappearances } from './dedup.mjs';
+import { median, areaClose, priceClose, detectDistricts, isDuplicate, groupOffers, detectDisappearances } from './dedup.mjs';
 
 test('median: środek, parzysta liczba, pusta lista', () => {
   assert.equal(median([3, 1, 2]), 2);
@@ -16,14 +16,72 @@ test('areaClose: tolerancja 3% względem większego metrażu', () => {
   assert.ok(!areaClose(0, 0));
 });
 
-test('isDuplicate: cena i kategoria muszą być identyczne', () => {
-  const a = { cat: 'dzialki', price: 415000, areaM2: 1804 };
-  assert.ok(isDuplicate(a, { cat: 'dzialki', price: 415000, areaM2: 1804 }));
-  assert.ok(!isDuplicate(a, { cat: 'domy', price: 415000, areaM2: 1804 }));
-  assert.ok(!isDuplicate(a, { cat: 'dzialki', price: 415001, areaM2: 1804 }));
-  assert.ok(!isDuplicate(a, { cat: 'dzialki', price: null, areaM2: 1804 }));
-  assert.ok(!isDuplicate({ cat: 'dzialki', price: 100, areaM2: null },
-                         { cat: 'dzialki', price: 100, areaM2: null })); // brak metrażu ⇒ nie scalamy
+test('priceClose: tolerancja 5% — agencje różnicują cenę między portalami', () => {
+  assert.ok(priceClose(415000, 415000));
+  assert.ok(priceClose(1395000, 1399000));   // 0,3% — realny dubel z danych
+  assert.ok(priceClose(399000, 420000));     // dokładnie 5%
+  assert.ok(!priceClose(750000, 850000));    // 12% — inna nieruchomość
+  assert.ok(!priceClose(null, 415000));
+});
+
+test('detectDistricts: rozpoznaje dzielnice z odmianą', () => {
+  assert.deepEqual([...detectDistricts('działka budowlana żory rój')], ['rój']);
+  assert.deepEqual([...detectDistricts('dom w roju, blisko lasu')], ['rój']);
+  assert.deepEqual([...detectDistricts('żory-rogoźna ul. wodzisławska')], ['rogoźna']);
+  assert.deepEqual([...detectDistricts('mieszkanie kleszczówka')], ['kleszczówka']);
+  assert.deepEqual([...detectDistricts('działka kleszczów żory')], ['kleszczów']);
+  assert.deepEqual([...detectDistricts('dom do zamieszkania w centrum')], []);
+});
+
+test('isDuplicate: cena w tolerancji, kategoria identyczna, różne portale', () => {
+  const a = { cat: 'dzialki', portal: 'OLX', price: 415000, areaM2: 1804, title: '', place: '' };
+  assert.ok(isDuplicate(a, { cat: 'dzialki', portal: 'N-O.pl', price: 415000, areaM2: 1804, title: '', place: '' }));
+  assert.ok(isDuplicate(a, { cat: 'dzialki', portal: 'N-O.pl', price: 419000, areaM2: 1804, title: '', place: '' })); // dryf 1%
+  assert.ok(!isDuplicate(a, { cat: 'domy', portal: 'N-O.pl', price: 415000, areaM2: 1804, title: '', place: '' }));
+  assert.ok(!isDuplicate(a, { cat: 'dzialki', portal: 'N-O.pl', price: null, areaM2: 1804, title: '', place: '' }));
+  assert.ok(!isDuplicate({ cat: 'dzialki', portal: 'OLX', price: 100000, areaM2: null, title: '', place: '' },
+                         { cat: 'dzialki', portal: 'N-O.pl', price: 100000, areaM2: null, title: '', place: '' })); // brak metrażu ⇒ nie scalamy
+});
+
+test('isDuplicate: ten sam portal scala tylko przy niemal identycznych liczbach (≤1%)', () => {
+  // dwie agencje wystawiają ten sam dom na jednym portalu z tymi samymi liczbami
+  const a = { cat: 'dzialki', portal: 'N-O.pl', price: 279000, areaM2: 989, title: 'oferta A', place: '' };
+  const b = { cat: 'dzialki', portal: 'N-O.pl', price: 279000, areaM2: 989, title: 'oferta B', place: '' };
+  assert.ok(isDuplicate(a, b));
+  // ale 2,4% różnicy ceny w obrębie portalu = raczej inna nieruchomość (osiedle)
+  const c = { cat: 'domy', portal: 'N-O.pl', price: 780000, areaM2: 127, title: '', place: '' };
+  const d = { cat: 'domy', portal: 'N-O.pl', price: 799000, areaM2: 128, title: '', place: '' };
+  assert.ok(!isDuplicate(c, d));
+});
+
+test('isDuplicate: konflikt dzielnic blokuje scalenie', () => {
+  const roj = { cat: 'dzialki', portal: 'Otodom', price: 279000, areaM2: 989, title: 'Atrakcyjna działka budowlana Żory Rój', place: 'Żory' };
+  const kleszczow = { cat: 'dzialki', portal: 'OLX', price: 285000, areaM2: 1000, title: 'Działka Kleszczów Żory 1000 m²', place: 'Żory' };
+  assert.ok(!isDuplicate(roj, kleszczow));       // cena 2,1% i metraż 1,1% pasują, ale dzielnice różne
+  const bezDzielnicy = { cat: 'dzialki', portal: 'OLX', price: 285000, areaM2: 1000, title: 'Działka na sprzedaż', place: 'Żory' };
+  assert.ok(isDuplicate(roj, bezDzielnicy));     // druga strona nie deklaruje dzielnicy — brak konfliktu
+});
+
+test('groupOffers: kilka lustrzanek z jednego portalu dołącza do kanonicznej', () => {
+  // ta sama nieruchomość: OLX + dwie agencje na N-O.pl (obie pasują do kanonicznej)
+  const olx = { id: 'olx-1', cat: 'domy', portal: 'OLX', price: 799000, areaM2: 128, title: '', place: '' };
+  const no1 = { id: 'no-1', cat: 'domy', portal: 'N-O.pl', price: 780000, areaM2: 127, title: '', place: '' };
+  const no2 = { id: 'no-2', cat: 'domy', portal: 'N-O.pl', price: 787000, areaM2: 127, title: '', place: '' };
+  const groups = groupOffers([olx, no1, no2]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0][0].id, 'olx-1');
+  assert.equal(groups[0].length, 3);
+});
+
+test('groupOffers: identyczne lustro nie jest blokowane przez inną ofertę z portalu', () => {
+  // przypadek z danych: prawdziwe lustro OLX↔Otodom (identyczny tytuł/cena/metraż)
+  // plus druga oferta z Otodomu pasująca do kanonicznej luźniej
+  const olx = { id: 'olx-1', cat: 'domy', portal: 'OLX', price: 1199000, areaM2: 117.07, title: 'piękny dom parterowy żory - rogoźna', place: '' };
+  const otoInny = { id: 'oto-2', cat: 'domy', portal: 'Otodom', price: 1150000, areaM2: 120.69, title: 'dom parterowy na sprzedaż', place: '' };
+  const otoLustro = { id: 'oto-1', cat: 'domy', portal: 'Otodom', price: 1199000, areaM2: 117.07, title: 'piękny dom parterowy żory - rogoźna', place: '' };
+  const groups = groupOffers([olx, otoInny, otoLustro]);
+  assert.equal(groups.length, 1);                          // wszystko w jednej grupie z kanoniczną OLX
+  assert.equal(groups[0][0].id, 'olx-1');
 });
 
 test('groupOffers: scala OLX+N-O.pl, kanoniczna wg priorytetu OLX>Otodom>N-O.pl', () => {
@@ -68,7 +126,7 @@ test('detectDisappearances: karencja 3 dni, awaria portalu, żywy dubel', () => 
     'no-lustro': { portal: 'N-O.pl', cat: 'dzialki', title: 'lustro', url: 'u4', firstSeen: '2026-06-01T00:00:00Z',
       lastSeen: '2026-07-10T00:00:00Z', areaM2: 1804, priceHistory: [{ at: 'x', price: 415000 }] },
   };
-  const live = [{ cat: 'dzialki', price: 415000, areaM2: 1804 }]; // ta sama nieruchomość wciąż na OLX
+  const live = [{ cat: 'dzialki', portal: 'OLX', price: 415000, areaM2: 1804 }]; // ta sama nieruchomość wciąż na OLX
   const { archived, gone } = detectDisappearances(seen, live, new Set(['Otodom|dzialki']), now);
   assert.deepEqual(archived.map(a => a.id), ['olx-old']);
   assert.equal(archived[0].lastPrice, 210000);

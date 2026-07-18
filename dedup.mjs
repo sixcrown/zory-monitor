@@ -10,16 +10,56 @@ export function median(arr) {
   return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
 }
 
+const within = (a, b, tol) => a > 0 && b > 0 && Math.abs(a - b) / Math.max(a, b) <= tol;
+
 // Portale różnie zaokrąglają metraż — tolerujemy 3% różnicy względem większego.
 export function areaClose(a, b) {
-  return a > 0 && b > 0 && Math.abs(a - b) / Math.max(a, b) <= 0.03;
+  return within(a, b, 0.03);
 }
 
-// Dubel = ta sama kategoria + identyczna cena + metraż w tolerancji.
-// Brak ceny albo metrażu po którejkolwiek stronie ⇒ wolimy zostawić dubel niż
-// skleić dwie różne nieruchomości.
+// Agencje wystawiają tę samą nieruchomość z lekko różną ceną na różnych portalach
+// (obserwowany dryf 0,1–5%) — tolerujemy 5% różnicy względem wyższej ceny.
+export function priceClose(a, b) {
+  return within(a, b, 0.05);
+}
+
+// Dzielnice/sołectwa Żor — wzorce łapią też odmianę (w Roju, w Rogoźnej itd.).
+const DISTRICT_PATTERNS = [
+  ['rój', /\brój\b|\broju\b/],
+  ['rogoźna', /rogo[źz]n/],
+  ['baranowice', /baranowic/],
+  ['kleszczówka', /kleszcz[óo]wk/],
+  ['kleszczów', /kleszcz[óo]w(?!k)/],
+  ['osiny', /\bosin/],
+  ['rowień', /rowie[ńn]/],
+  ['folwarki', /folwark/],
+  ['śródmieście', /[śs]r[óo]dmie[śs]/],
+];
+
+export function detectDistricts(text) {
+  const t = String(text ?? '').toLowerCase();
+  return new Set(DISTRICT_PATTERNS.filter(([, re]) => re.test(t)).map(([name]) => name));
+}
+
+// Obie oferty deklarują znane dzielnice i żadna się nie pokrywa ⇒ to różne
+// nieruchomości, choćby cena i metraż pasowały (np. Rój vs Kleszczów).
+function districtConflict(a, b) {
+  const da = detectDistricts((a.place ?? '') + ' ' + (a.title ?? ''));
+  const db = detectDistricts((b.place ?? '') + ' ' + (b.title ?? ''));
+  return da.size > 0 && db.size > 0 && ![...da].some(d => db.has(d));
+}
+
+// Dubel = ta sama kategoria + brak konfliktu dzielnic + liczby w tolerancji:
+// między portalami cena ≤5% i metraż ≤3% (agencje różnicują cenę), w obrębie
+// jednego portalu ostrzej — cena i metraż ≤1% (różne agencje wystawiają tę samą
+// nieruchomość z tymi samymi liczbami; luźniejszy próg skleiłby osiedle
+// deweloperskie). Brak ceny albo metrażu ⇒ wolimy zostawić dubel niż skleić
+// dwie różne nieruchomości. Fałszywe scalenie nie gubi ogłoszeń — karta linkuje
+// do wszystkich wpisów grupy.
 export function isDuplicate(a, b) {
-  return a.cat === b.cat && a.price != null && a.price === b.price && areaClose(a.areaM2, b.areaM2);
+  if (a.cat !== b.cat || districtConflict(a, b)) return false;
+  const [pTol, aTol] = a.portal === b.portal ? [0.01, 0.01] : [0.05, 0.03];
+  return within(a.price, b.price, pTol) && within(a.areaM2, b.areaM2, aTol);
 }
 
 // Grupuje oferty w duble; w grupie oferty wg priorytetu portalu, [0] = kanoniczna.

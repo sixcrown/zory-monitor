@@ -31,10 +31,11 @@ i podlinkowanego projektu w `public/.vercel` — bez tego krok jest pomijany).
 ## Deduplikacja i dodatki
 
 - Ta sama nieruchomość na kilku portalach jest scalana w jedną kartę
-  („Na portalach: OLX · Otodom · N-O.pl"); reguła: identyczna cena + metraż ±3%,
-  oferta kanoniczna wg priorytetu OLX > Otodom > N-O.pl. Dubel znanej oferty
-  nie wysyła powiadomienia; obniżka pushowana raz na grupę. Statystyki i mediany
-  liczone po scaleniu.
+  („Na portalach: OLX · Otodom · N-O.pl"); reguła: między portalami cena ±5%
+  + metraż ±3%, w obrębie portalu ostrzej (±1%), zawsze bez konfliktu dzielnic
+  (Rój vs Kleszczów ⇒ osobno), oferta kanoniczna wg priorytetu OLX > Otodom > N-O.pl.
+  Dubel znanej oferty nie wysyła powiadomienia; obniżka pushowana raz na grupę.
+  Statystyki i mediany liczone po scaleniu.
 - `archive.json` — oferty zniknięte ze wszystkich portali na ≥3 dni (sekcja
   „zniknięte" na podstronie „wszystkie" + mediana dni do zniknięcia i końcowej ceny).
 - `trend.json` — dzienna mediana zł/m² z pełnych przebiegów (wykres na stronie

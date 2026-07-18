@@ -22,10 +22,21 @@ deterministyczny).
 
 ## 1. Scalanie dubli
 
-**Reguła dopasowania** (wybrana świadomie spośród 3 wariantów): dwie oferty to dubel, gdy
+**Reguła dopasowania** (v3 — po obserwacjach: agencje różnicują cenę między portalami
+o 0,1–5%, a ta sama nieruchomość bywa wystawiona kilka razy na jednym portalu przez
+różne agencje): dwie oferty to dubel, gdy
 - ta sama kategoria (`cat`), oraz
-- identyczna cena (`price`, obie niepuste), oraz
-- oba metraże znane i różnią się ≤ 3%, licząc `|a − b| / max(a, b)` (portale różnie zaokrąglają).
+- cena i metraż w tolerancji `|a − b| / max(a, b)`:
+  - **różne portale**: cena ≤ 5%, metraż ≤ 3% (portale różnie zaokrąglają),
+  - **ten sam portal**: cena ≤ 1% i metraż ≤ 1% (ostrzej — luźniejszy próg skleiłby
+    bliźniacze domy z osiedla deweloperskiego), oraz
+- **brak konfliktu dzielnic**: jeśli obie oferty (pole lokalizacji + tytuł) deklarują
+  znane dzielnice Żor i żadna się nie pokrywa ⇒ nie scalamy (przypadek z danych:
+  działka „Rój" 279 000 zł/989 m² vs działka „Kleszczów" 285 000 zł/1000 m²).
+
+Świadomy kompromis: dwa identycznie wycenione bliźniaki deweloperskie o tym samym
+metrażu skleją się w jedną kartę — akceptowalne, bo karta linkuje do WSZYSTKICH
+ogłoszeń grupy (nic nie ginie, zaniżony jest tylko licznik).
 
 Brak metrażu po którejkolwiek stronie ⇒ **nie** scalamy (wolimy zostawić dubel niż skleić
 dwie różne działki). Przykład kontrolny z danych: dwie działki po 149 000 zł, 885 vs 921 m²
