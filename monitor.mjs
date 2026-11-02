@@ -142,19 +142,53 @@ function log(msg) {
   try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch {}
 }
 
+// OLX: ochrona botowa CloudFront odrzuca odcisk TLS klienta Node'a (403 „The request could not
+// be satisfied", od 2026-09-12 przerywane, od 2026-10-10 niemal stale), a te same żądania przez
+// systemowy curl.exe (Schannel) przechodzą. Świadoma decyzja użytkownika z 2026-11-02 — patrz
+// docs/superpowers/specs/2026-11-02-olx-curl-design.md. Bez curl.exe źródło wraca na fetch.
+// Kompilacja ma znaczenie: Microsoft curl 8.21 z System32 dostaje 403 jak Node, curl 8.1 z Git
+// for Windows (mingw64) przechodzi. Kolejność: zmienna OLX_CURL, curl Gita, curl systemowy.
+const CURL = [
+  process.env.OLX_CURL,
+  path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'mingw64', 'bin', 'curl.exe'),
+  path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'curl.exe'),
+].find(p => p && fs.existsSync(p));
+const viaCurl = url => !!CURL && /^https:\/\/(www\.)?olx\.pl\//.test(url);
+
+function curlGet(url) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-sS', '-L', '--compressed', '--max-time', '30',
+      '-A', HEADERS['User-Agent'], '-H', 'Accept: ' + HEADERS.Accept, '-H', 'Accept-Language: ' + HEADERS['Accept-Language'],
+      '-w', '\n%{http_code}', url,
+    ];
+    execFile(CURL, args, { maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+      if (err) return reject(new Error('curl: ' + String(stderr || err.message).trim().slice(0, 200)));
+      const i = stdout.lastIndexOf('\n');
+      resolve({ status: Number(stdout.slice(i + 1)) || 0, text: stdout.slice(0, i), retryAfter: null });
+    });
+  });
+}
+
+async function httpGet(url) {
+  if (viaCurl(url)) return curlGet(url);
+  const res = await fetch(url, { headers: HEADERS, redirect: 'follow', signal: AbortSignal.timeout(30000) });
+  return { status: res.status, text: await res.text(), retryAfter: res.headers.get('retry-after') };
+}
+
 async function fetchHtml(url) {
   let lastErr;
   for (let i = 0; i < 3; i++) {
     try {
-      const res = await fetch(url, { headers: HEADERS, redirect: 'follow', signal: AbortSignal.timeout(30000) });
+      const res = await httpGet(url);
       // 429 = throttling; ponawianie tylko pogarsza sprawę — poddajemy się od razu,
       // ale zapamiętujemy Retry-After, żeby uszanować wskazaną pauzę
       if (res.status === 429) {
         throw Object.assign(new Error('HTTP 429 (throttling)'),
-          { noRetry: true, retryAfter: Number(res.headers.get('retry-after')) || null });
+          { noRetry: true, retryAfter: Number(res.retryAfter) || null });
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.text();
+      if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+      return res.text;
     } catch (e) {
       lastErr = e;
       if (e.noRetry) break;

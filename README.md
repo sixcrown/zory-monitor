@@ -35,6 +35,12 @@ oferty bez powiadomień. Trend zł/m² zapisywany jest per kategoria, której ws
 `node monitor.mjs --dry-run` — pełny przebieg do katalogu `dry-run/` bez zapisu stanu, powiadomień
 i publikacji (do sprawdzania parserów i konfiguracji).
 
+Uwagi o OLX: od września 2026 ochrona botowa CloudFront przed OLX-em odrzuca klienta HTTPS Node'a
+(403 „The request could not be satisfied"), a te same żądania przez curla z Git for Windows przechodzą — listy
+OLX idą więc przez curla z Git for Windows (`%ProgramFiles%\Git\mingw64\bin\curl.exe`; curl Microsoftu z System32
+też dostaje 403; ścieżkę nadpisuje zmienna `OLX_CURL`) — świadoma decyzja, patrz
+`docs/superpowers/specs/2026-11-02-olx-curl-design.md`). Bez `curl.exe` źródło wraca na `fetch`.
+
 Uwagi o N-O.pl: lista nie podaje dat publikacji (data dociągana ze strony oferty dla nowych),
 strona listy ma zawsze 41 pozycji: najpierw żywe oferty z miejscowości (tyle, ile mówi „Zobacz N ogłoszeń"
 w opisie strony), potem "oferty z okolicy" (inna miejscowość — odfiltrowane), a resztę i kolejne strony
