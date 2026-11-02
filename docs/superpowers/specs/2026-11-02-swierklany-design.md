@@ -51,6 +51,10 @@ Data: 2026-11-02. Prośba: „dodajmy jeszcze Świerklany Górne".
    Dotyczy wszystkich list N-O.pl — Żory i Rybnik przestają zasysać archiwalia z końcowych stron
    (te, które już są w stanie, znikną normalną ścieżką do `archive.json` po 3 dniach).
    Brak frazy w opisie = brak limitu (zachowanie jak dotąd).
+   Weryfikacja na domach w Żorach: deklarowane 62, pozycja 62 to żywa oferta, 63 i dalej mają
+   na stronie „Ogłoszenie archiwalne". Stan niósł 132 rekordy N-O.pl domów Żory, z czego 70
+   archiwalnych — usunięte jednorazowo ze `state.json` (bez wpisów w archiwum, bo nigdy nie były
+   żywe w czasie obserwacji), kopia w scratchpadzie sesji.
 
 ## Poza zakresem
 
