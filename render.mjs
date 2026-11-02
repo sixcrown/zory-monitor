@@ -1,9 +1,20 @@
 // Renderowanie HTML raportu i katalogu — czyste funkcje string → string.
 // Wydzielone z monitor.mjs bez zmian logiki. Testy: render.test.mjs.
 
-import { median } from './dedup.mjs';
+import { median, detectDistricts } from './dedup.mjs';
+import { REGIONS, DISTRICT_OPTIONS } from './areas.mjs';
 
 export const zl = v => (v == null ? '?' : Number(v).toLocaleString('pl-PL') + ' zł');
+
+// Kategorie pogrupowane po regionie, w kolejności REGIONS (region nieznany → grupa bez nagłówka).
+function byRegion(CATS) {
+  const keys = [...new Set([...Object.keys(REGIONS), ...Object.values(CATS).map(c => c.region)])];
+  return keys
+    .map(r => ({ region: r, label: REGIONS[r]?.label ?? '', cats: Object.entries(CATS).filter(([, c]) => c.region === r) }))
+    .filter(g => g.cats.length);
+}
+const catHeading = cfg => [cfg.label, REGIONS[cfg.region]?.label].filter(Boolean).join(' — ');
+const areaNames = () => Object.values(REGIONS).map(r => r.short).join(' i ');
 
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -58,8 +69,25 @@ function renderDrop(d) {
       </div>`;
 }
 
+// Strona główna rozwija tylko świeże przebiegi: z ostatnich `days` dni, ale zawsze
+// co najmniej `min` najnowszych z treścią (po tygodniach awarii OLX okno bywa puste).
+// `runs` muszą być posortowane od najnowszego (tak trzyma je history.json).
+export const RECENT_DAYS = 7;
+export function splitRuns(runs, nowMs = Date.now(), { days = RECENT_DAYS, min = 3 } = {}) {
+  const cut = nowMs - days * 864e5;
+  const inWindow = runs.filter(r => new Date(r.at).getTime() >= cut).length;
+  const n = Math.max(inWindow, Math.min(min, runs.length));
+  return { recent: runs.slice(0, n), older: runs.slice(n) };
+}
+
 export function renderReport(CATS, history, statsByCat, negoByCat, trend = []) {
-  const cols = Object.entries(CATS).map(([cat, cfg]) => {
+  const renderRun = run => `
+    <section>
+      <h5 class="run">${esc(new Date(run.at).toLocaleString('pl-PL'))} — ${[run.offers.length ? `nowe: ${run.offers.length}` : '', run.drops.length ? `obniżki: ${run.drops.length}` : ''].filter(Boolean).join(', ')}</h5>
+      ${run.offers.map(renderOffer).join('')}
+      ${run.drops.map(renderDrop).join('')}
+    </section>`;
+  const col = ([cat, cfg]) => {
     const s = statsByCat[cat];
     const nego = negoByCat?.[cat] ?? [];
     const runs = history
@@ -69,9 +97,11 @@ export function renderReport(CATS, history, statsByCat, negoByCat, trend = []) {
         drops: (run.drops ?? []).filter(d => (d.cat ?? 'dzialki') === cat),
       }))
       .filter(r => r.offers.length || r.drops.length);
+    const { recent, older } = splitRuns(runs);
+    const sum = key => older.reduce((n, r) => n + r[key].length, 0);
     return `
-  <div class="col">
-    <h2>${cfg.icon} ${esc(cfg.label)}</h2>
+  <div class="col" id="cat-${esc(cat)}">
+    <h3 class="cat">${cfg.icon} ${esc(cfg.label)}</h3>
     ${s ? `<div class="stats">
       <div>ofert na rynku: <b>${s.count}</b></div>
       ${s.medPrice ? `<div>mediana ceny: <b>${esc(zl(s.medPrice))}</b></div>` : ''}
@@ -89,26 +119,38 @@ export function renderReport(CATS, history, statsByCat, negoByCat, trend = []) {
     <details><summary>❓ O co zapytać sprzedającego</summary>
       <ul>${cfg.questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>
     </details>
-    <h3>Nowe oferty i obniżki</h3>
-    ${runs.length ? runs.map(run => `
-    <section>
-      <h4>${esc(new Date(run.at).toLocaleString('pl-PL'))} — ${[run.offers.length ? `nowe: ${run.offers.length}` : '', run.drops.length ? `obniżki: ${run.drops.length}` : ''].filter(Boolean).join(', ')}</h4>
-      ${run.offers.map(renderOffer).join('')}
-      ${run.drops.map(renderDrop).join('')}
-    </section>`).join('') : '<p class="empty">Jeszcze nic nowego się nie pojawiło.</p>'}
+    <h4 class="sub">Nowe oferty i obniżki</h4>
+    ${runs.length ? recent.map(renderRun).join('') : '<p class="empty">Jeszcze nic nowego się nie pojawiło.</p>'}
+    ${older.length ? `<details class="older"><summary>📜 Starsze niż ${RECENT_DAYS} dni: ${sum('offers')} nowych, ${sum('drops')} obniżek (do ${esc(new Date(older[0].at).toLocaleDateString('pl-PL'))})</summary>${older.map(renderRun).join('')}</details>` : ''}
   </div>`;
-  }).join('\n');
+  };
+  // przyklejony pasek: skoki do regionów i kategorii (na telefonie kolumny idą jedna pod drugą)
+  const nav = byRegion(CATS).filter(g => g.label).map(g =>
+    `<a href="#region-${esc(g.region)}"><b>${esc(REGIONS[g.region]?.short ?? g.label)}</b></a>${g.cats.map(([cat, cfg]) => ` <a href="#cat-${esc(cat)}">${cfg.icon} ${esc(cfg.label.toLowerCase())}</a>`).join('')}`
+  ).join(' <span class="sep">·</span> ');
+  const total = Object.values(statsByCat).reduce((n, s) => n + (s?.count ?? 0), 0);
+  const groups = byRegion(CATS).map(g => `
+${g.label ? `<h2 class="region" id="region-${esc(g.region)}">${esc(g.label)}</h2>` : ''}
+<div class="cols">
+${g.cats.map(col).join('\n')}
+</div>`).join('\n');
 
   return `<!doctype html>
-<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nieruchomości Żory — monitor</title>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nieruchomości ${esc(areaNames())} — monitor</title>
 <style>
 body{font-family:'Segoe UI',sans-serif;max-width:1100px;margin:1.5rem auto;padding:0 1rem;color:#222}
-h1{font-size:1.4rem} h2{font-size:1.15rem;margin:.2rem 0 .6rem} h3{font-size:1rem;margin-top:1.4rem}
-h4{font-size:.9rem;color:#444;border-bottom:1px solid #ddd;padding-bottom:.25rem;margin:1.2rem 0 .4rem}
-.updated{color:#777;font-size:.85rem;margin-bottom:1.2rem}
+h1{font-size:1.4rem}
+h2.region{font-size:1.3rem;margin:1.8rem 0 .9rem;padding-bottom:.3rem;border-bottom:2px solid #0b57d0}
+h3.cat{font-size:1.15rem;margin:.2rem 0 .6rem} h4.sub{font-size:1rem;margin-top:1.4rem}
+h5.run{font-size:.9rem;color:#444;border-bottom:1px solid #ddd;padding-bottom:.25rem;margin:1.2rem 0 .4rem}
+.updated{color:#777;font-size:.85rem;margin-bottom:.8rem}
 .updated a{color:#0b57d0;text-decoration:none}
+nav.top{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid #e3e3e3;margin:0 -1rem 1rem;padding:.45rem 1rem;font-size:.88rem;white-space:nowrap;overflow-x:auto}
+nav.top a{color:#0b57d0;text-decoration:none;margin-right:.35rem} nav.top .sep{color:#bbb;margin:0 .3rem}
+h2.region,.col{scroll-margin-top:3rem}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:2.5rem}
-@media(max-width:820px){.cols{grid-template-columns:1fr}}
+@media(max-width:820px){.cols{grid-template-columns:1fr} nav.top{white-space:normal;line-height:1.7} h2.region,.col{scroll-margin-top:4.5rem}}
+details.older{margin-top:1.2rem;border-top:1px dashed #ddd;padding-top:.6rem} details.older>summary{color:#555}
 .stats{background:#f3f6f9;border-radius:8px;padding:.7rem .9rem;font-size:.92rem;line-height:1.5}
 details{margin-top:.7rem;font-size:.9rem} details summary{cursor:pointer;color:#0b57d0}
 details ul{margin:.4rem 0 .2rem;padding-left:1.2rem} details li{margin:.25rem 0}
@@ -129,12 +171,11 @@ details ul{margin:.4rem 0 .2rem;padding-left:1.2rem} details li{margin:.25rem 0}
 #tip{position:absolute;background:#222;color:#fff;padding:.2rem .5rem;border-radius:5px;font-size:.78rem;pointer-events:none;white-space:nowrap}
 footer{margin-top:3rem;color:#888;font-size:.8rem;line-height:1.5}
 </style></head><body>
-<h1>🏡 Nieruchomości w Żorach — monitor</h1>
-<div class="updated">Ostatnie sprawdzenie: ${esc(new Date().toLocaleString('pl-PL'))} · OLX + Otodom + Nieruchomosci-online · co godzinę 7:00–22:00 · <a href="wszystkie.html">📋 wszystkie oferty (${Object.values(statsByCat).reduce((n, s) => n + (s?.count ?? 0), 0)}) →</a></div>
-<div class="cols">
-${cols}
-</div>
-<footer>Oceny „okazja / powyżej mediany" i ostrzeżenia to automatyczne heurystyki liczone względem mediany zł/m² z bieżących ogłoszeń w Żorach — pomagają ustalić priorytety, ale nie zastępują weryfikacji oferty. Generowane automatycznie przez zory-monitor.</footer>
+<h1 id="top">🏡 Nieruchomości ${esc(areaNames())} — monitor</h1>
+<div class="updated">Ostatnie sprawdzenie: ${esc(new Date().toLocaleString('pl-PL'))} · OLX + Otodom + Nieruchomosci-online · co godzinę 7:00–22:00</div>
+<nav class="top"><a href="#top" title="na górę">⬆</a> ${nav}${nav ? ' <span class="sep">·</span> ' : ''}<a href="wszystkie.html">📋 wszystkie oferty (${total}) →</a></nav>
+${groups}
+<footer>Oceny „okazja / powyżej mediany" i ostrzeżenia to automatyczne heurystyki liczone względem mediany zł/m² z bieżących ogłoszeń w danym obszarze (${esc(areaNames())} liczone osobno) — pomagają ustalić priorytety, ale nie zastępują weryfikacji oferty. Generowane automatycznie przez zory-monitor.</footer>
 <div id="tip" hidden></div>
 <script>
 document.addEventListener('mouseover', function (e) {
@@ -162,7 +203,7 @@ export function renderArchive(CATS, archive) {
     const medPpm = median(all.map(a => a.pricePerM2).filter(v => v > 0));
     return `
   <section>
-    <h2>${cfg.icon} ${esc(cfg.label)} — zniknięte w ost. 30 dniach (${recent.length})</h2>
+    <h2>${cfg.icon} ${esc(catHeading(cfg))} — zniknięte w ost. 30 dniach (${recent.length})</h2>
     <div class="stats">z całego archiwum (${all.length}): mediana dni do zniknięcia: <b>${medDays ?? '?'}</b>${medPpm ? ` · mediana końcowej ceny: <b>${medPpm} zł/m²</b>` : ''}</div>
     ${recent.map(a => `
     <div class="offer">
@@ -172,9 +213,6 @@ export function renderArchive(CATS, archive) {
   </section>`;
   }).join('');
 }
-
-// Znane dzielnice/sołectwa Żor — do filtra lokalizacji na podstronie katalogu.
-const DISTRICTS = ['Baranowice', 'Kleszczów', 'Kleszczówka', 'Osiny', 'Rogoźna', 'Rowień', 'Folwarki', 'Rój', 'Śródmieście'];
 
 // Podstrona-katalog: WSZYSTKIE aktualne oferty, przeglądalne i sortowalne.
 export function renderCatalog(CATS, catalogByCat, statsByCat, archive = []) {
@@ -194,7 +232,7 @@ export function renderCatalog(CATS, catalogByCat, statsByCat, archive = []) {
     const items = [...(catalogByCat[cat] ?? [])].sort((a, b) => (a.pricePerM2 ?? Infinity) - (b.pricePerM2 ?? Infinity));
     return `
   <section>
-    <h2>${cfg.icon} ${esc(cfg.label)} (<span class="viscount">${items.length}</span>)</h2>
+    <h2>${cfg.icon} ${esc(catHeading(cfg))} (<span class="viscount">${items.length}</span>)</h2>
     ${s ? `<div class="stats">
       <div>mediana ceny: <b>${esc(zl(s.medPrice))}</b> · mediana: <b>${s.medPpm} zł/m²</b> (zakres ${s.minPpm}–${s.maxPpm}) · mediana powierzchni: <b>${s.medArea} m²</b></div>
     </div>` : ''}
@@ -206,7 +244,7 @@ export function renderCatalog(CATS, catalogByCat, statsByCat, archive = []) {
     </div>
     <div id="list-${cat}">
       ${items.map(o => `
-      <div class="offer" data-ppm="${o.pricePerM2 ?? ''}" data-price="${o.price ?? ''}" data-area="${o.areaM2 ?? ''}" data-days="${o.dom ?? ''}" data-title="${esc(o.title.toLowerCase())}" data-loc="${esc(((o.place ?? '') + ' ' + o.title).toLowerCase())}">
+      <div class="offer" data-ppm="${o.pricePerM2 ?? ''}" data-price="${o.price ?? ''}" data-area="${o.areaM2 ?? ''}" data-days="${o.dom ?? ''}" data-title="${esc(o.title.toLowerCase())}" data-dz="${esc((o.districts ?? [...detectDistricts((o.place ?? '') + ' ' + o.title)]).join(' '))}">
         <a href="${esc(o.url)}" target="_blank"><strong>${esc(o.title)}</strong></a>
         <div class="meta">${esc(o.portal)} · ${esc(o.priceText)}${o.areaM2 ? ` · ${o.areaM2} m²` : ''}${o.pricePerM2 ? ` · ${o.pricePerM2} zł/m²` : ''}${o.place ? ` · ${esc(o.place)}` : ''}${o.dom != null ? ` · ~${o.dom} dni na rynku` : ''}${o.dropPct ? ` · <span class="dr">↓ ${o.dropPct}%</span>` : ''} ${badge(o, s)}</div>
         ${o.mirrors?.length ? `<div class="mirrors">Na portalach: <a href="${esc(o.url)}" target="_blank">${esc(o.portal)}</a>${o.mirrors.map(m => ` · <a href="${esc(m.url)}" target="_blank">${esc(m.portal)}</a>`).join('')}</div>` : ''}
@@ -215,7 +253,7 @@ export function renderCatalog(CATS, catalogByCat, statsByCat, archive = []) {
   </section>`;
   }).join('\n');
   return `<!doctype html>
-<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wszystkie oferty — Żory</title>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wszystkie oferty — ${esc(areaNames())}</title>
 <style>
 body{font-family:'Segoe UI',sans-serif;max-width:860px;margin:1.5rem auto;padding:0 1rem;color:#222}
 h1{font-size:1.4rem} h2{font-size:1.15rem;margin:1.8rem 0 .5rem}
@@ -238,13 +276,16 @@ h1{font-size:1.4rem} h2{font-size:1.15rem;margin:1.8rem 0 .5rem}
 .b-ok{color:#1a6b2f;font-weight:600} .b-mid{color:#888} .b-hi{color:#b3261e}
 footer{margin-top:3rem;color:#888;font-size:.8rem}
 </style></head><body>
-<h1>📋 Wszystkie aktualne oferty w Żorach (${total})</h1>
+<h1>📋 Wszystkie aktualne oferty (${total}) — ${esc(areaNames())}</h1>
 <div class="updated">Stan na ${esc(new Date().toLocaleString('pl-PL'))} · OLX + Otodom + Nieruchomosci-online · <a href="index.html">← wróć do nowości i obniżek</a></div>
 <div class="filters">
   <input id="f-q" type="search" placeholder="szukaj w tytule…">
   <span>cena <input id="f-pmin" type="number" placeholder="od"> – <input id="f-pmax" type="number" placeholder="do"> zł</span>
   <span>metraż <input id="f-amin" type="number" placeholder="od"> – <input id="f-amax" type="number" placeholder="do"> m²</span>
-  <select id="f-d"><option value="">dzielnica: wszystkie</option>${DISTRICTS.map(d => `<option value="${d.toLowerCase()}">${d}</option>`).join('')}</select>
+  <select id="f-d"><option value="">dzielnica: wszystkie</option>${byRegion(CATS).map(g => {
+    const opts = DISTRICT_OPTIONS.filter(d => d.region === g.region);
+    return opts.length ? `<optgroup label="${esc(g.label)}">${opts.map(d => `<option value="${esc(d.key)}">${esc(d.label)}</option>`).join('')}</optgroup>` : '';
+  }).join('')}</select>
   <button id="f-x">wyczyść</button>
 </div>
 ${secs}
@@ -270,7 +311,7 @@ function applyFilters() {
     const ok = (!q || (el.dataset.title || '').includes(q))
       && (!pmin || price >= pmin) && (!pmax || price <= pmax)
       && (!amin || area >= amin) && (!amax || area <= amax)
-      && (!d || (el.dataset.loc || '').includes(d));
+      && (!d || (el.dataset.dz || '').split(' ').indexOf(d) >= 0);
     el.style.display = ok ? '' : 'none';
   });
   document.querySelectorAll('[id^="list-"]').forEach(function (box) {

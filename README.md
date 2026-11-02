@@ -1,8 +1,30 @@
-# zory-monitor — monitoring działek i domów w Żorach
+# zory-monitor — monitoring działek i domów w Żorach i wschodnim Rybniku
 
-Skrypt sprawdza nowe ogłoszenia sprzedaży **działek i domów** w Żorach na **OLX**, **Otodom**
-i **Nieruchomosci-online.pl** i przy nowych ofertach pokazuje powiadomienie Windows
-(kliknięcie otwiera `report.html`).
+Skrypt sprawdza nowe ogłoszenia sprzedaży **działek i domów** w Żorach oraz we wschodnich
+dzielnicach Rybnika od strony A1 na **OLX**, **Otodom** i **Nieruchomosci-online.pl** i przy
+nowych ofertach pokazuje powiadomienie Windows (kliknięcie otwiera `report.html`).
+
+## Obszary
+
+Dwa regiony liczone osobno (własne mediany, trend, sekcje raportu, powiadomienia „Żory: … · Rybnik: …"):
+
+- **Żory** — całe miasto (jak dotąd).
+- **Rybnik — wschód (zjazd z A1)** — tylko dzielnice: Rybnik-Północ, Boguszowice (Stare, Osiedle,
+  Raszowiec), Gotartowice, Ligota-Ligocka Kuźnia, Kłokocin. Lista w `areas.mjs`
+  (`RYBNIK_AREA` + slugi Otodomu `RYBNIK_OTODOM_SLUGS`), wzorce nazw w `DISTRICT_PATTERNS` w `dedup.mjs`.
+
+Jak portale są zawężane do dzielnic: Otodom — jedno zapytanie „wiele lokalizacji" po slugach
+dzielnic (zły slug = 404 całego zapytania; paginacja tylko do `totalPages`, bo dalej portal zwraca
+listę ogólnopolską); N-O.pl — lista całego Rybnika + dzielnica ogłoszenia z bloku śledzącego strony
+(JSON-LD jej nie ma; strony dzielnicowe odrzucone, bo doklejają ogłoszenia archiwalne); OLX — lista
+całego Rybnika + filtr po tytule/opisie (OLX nie podaje dzielnic Rybnika). Oferta bez żadnej
+wzmianki o dzielnicy docelowej jest pomijana.
+
+Nowo dodana kategoria (bez wpisów w `state.json`) startuje po cichu jako baseline — bez lawiny
+„nowych" ofert. Trend zł/m² zapisywany jest per kategoria, której wszystkie źródła odpowiedziały.
+
+`node monitor.mjs --dry-run` — pełny przebieg do katalogu `dry-run/` bez zapisu stanu, powiadomień
+i publikacji (do sprawdzania parserów i konfiguracji).
 
 Uwagi o N-O.pl: lista nie podaje dat publikacji (data dociągana ze strony oferty dla nowych),
 portal dokleja "oferty z okolicy" (filtrujemy tylko Żory) i łatwo daje HTTP 429 przy zbyt częstych
@@ -13,7 +35,7 @@ respektowany przez kolejne przebiegi; kasowany po udanym pobraniu).
 Bezpiecznik przeciwzalewowy: gdy jedno źródło wysypie naraz >25 nieznanych ofert (powrót po
 awarii/throttlingu), są one zapamiętywane po cichu jako baseline, bez powiadomień.
 
-Raport (dwie kolumny: Działki | Domy) zawiera dodatkowo:
+Raport (sekcja per region, w niej dwie kolumny: Działki | Domy) zawiera dodatkowo:
 - statystyki rynku per kategoria (liczba ofert, mediana ceny, mediana zł/m², mediana powierzchni) — odświeżane co przebieg,
 - automatyczną ocenę każdej nowej oferty względem mediany zł/m² (🟢 potencjalna okazja / 🟡 poniżej / ⚪ w normie / 🔴 powyżej) z heurystycznymi ostrzeżeniami (grunt rolny, podejrzanie niska cena, odświeżona oferta itd.),
 - checklistę pytań do sprzedającego dla działek i domów,
@@ -21,6 +43,9 @@ Raport (dwie kolumny: Działki | Domy) zawiera dodatkowo:
   dla domów fotowoltaika i udogodnienia (pompa ciepła, garaż, klimatyzacja, ogrzewanie…) — wraz z listą
   „Brak wzmianki o: …" dla ważnych rzeczy, których ogłoszenie nie podaje (OLX: opis z listy;
   Otodom: dociągana strona oferty — tylko dla nowych ofert).
+- okno czasowe: rozwinięte są tylko przebiegi z ostatnich 7 dni (zawsze min. 3 najnowsze z treścią),
+  starsze czekają zwinięte w „📜 Starsze niż 7 dni" pod każdą kategorią (nic nie ginie); przyklejony
+  pasek u góry skacze do regionów i kategorii (na telefonie kolumny układają się jedna pod drugą).
 
 Oceny to proste heurystyki statystyczne — pomagają priorytetyzować, nie zastępują weryfikacji.
 
@@ -40,8 +65,10 @@ i podlinkowanego projektu w `public/.vercel` — bez tego krok jest pomijany).
   „zniknięte" na podstronie „wszystkie" + mediana dni do zniknięcia i końcowej ceny).
 - `trend.json` — dzienna mediana zł/m² z pełnych przebiegów (wykres na stronie
   głównej, pojawia się od 5 dni pomiarów).
-- Podstrona „wszystkie": filtry ceny, metrażu, tytułu i dzielnicy + sortowanie.
-- Testy: `node --test` (logika dubli/zniknięć w `dedup.mjs`, render w `render.mjs`).
+- Podstrona „wszystkie": filtry ceny, metrażu, tytułu i dzielnicy (grupy Żory / Rybnik,
+  dopasowanie po rozpoznanej dzielnicy — łapie odmianę) + sortowanie.
+- Testy: `node --test` (dubel/zniknięcia/dzielnice w `dedup.mjs`, obszary w `areas.mjs`,
+  parsery w `parse.mjs`, render w `render.mjs`).
 
 ## Jak działa
 
@@ -63,6 +90,7 @@ i podlinkowanego projektu w `public/.vercel` — bez tego krok jest pomijany).
 |---|---|
 | `monitor.mjs` | główny skrypt (Node 20+, bez zależności npm) |
 | `dedup.mjs` / `render.mjs` | logika dubli i zniknięć / renderowanie HTML (+ testy `*.test.mjs`) |
+| `areas.mjs` / `parse.mjs` | regiony i dzielnice Rybnika (filtr obszaru) / czyste parsery danych portali |
 | `archive.json` / `trend.json` | oferty zniknięte / dzienne mediany zł/m² |
 | `toast.ps1` | powiadomienie Windows |
 | `run-monitor.vbs` | ukryty launcher dla Harmonogramu zadań |

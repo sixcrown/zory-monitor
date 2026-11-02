@@ -62,6 +62,13 @@ test('isDuplicate: konflikt dzielnic blokuje scalenie', () => {
   assert.ok(isDuplicate(roj, bezDzielnicy));     // druga strona nie deklaruje dzielnicy — brak konfliktu
 });
 
+test('isDuplicate: dzielnica nadana przez portal (place) nie blokuje scalenia — portale się mylą', () => {
+  // przypadek z danych (Rybnik, 2026-11-02): ta sama działka 4081 m² za tę samą cenę
+  const oto = { cat: 'dzialki_rybnik', portal: 'Otodom', price: 110000, areaM2: 4081, title: 'Działka, 4 081 m², Rybnik', place: 'Rybnik – Rybnik-Północ' };
+  const no = { cat: 'dzialki_rybnik', portal: 'N-O.pl', price: 110000, areaM2: 4081, title: 'Sprzedam działkę Rybnik - 4 081 m²', place: 'Rybnik – Boguszowice Stare, Bolesława Śmiałego' };
+  assert.ok(isDuplicate(oto, no));
+});
+
 test('groupOffers: kilka lustrzanek z jednego portalu dołącza do kanonicznej', () => {
   // ta sama nieruchomość: OLX + dwie agencje na N-O.pl (obie pasują do kanonicznej)
   const olx = { id: 'olx-1', cat: 'domy', portal: 'OLX', price: 799000, areaM2: 128, title: '', place: '' };
@@ -143,4 +150,18 @@ test('detectDisappearances: bez created liczy dni od firstSeen', () => {
     lastSeen: '2026-07-11T00:00:00Z', areaM2: 120, priceHistory: [{ at: 'x', price: 600000 }] } };
   const { archived } = detectDisappearances(seen, [], new Set(), now);
   assert.equal(archived[0].daysOnMarket, 10);            // 2026-07-01 → 2026-07-11
+});
+
+test('detectDistricts: wschodnie dzielnice Rybnika (zjazd z A1)', () => {
+  assert.deepEqual([...detectDistricts('Rybnik – Boguszowice Stare')], ['boguszowice']);
+  assert.deepEqual([...detectDistricts('dom w Boguszowicach, Rybnik')], ['boguszowice']);
+  assert.deepEqual([...detectDistricts('Rybnik – Raszowiec')], ['boguszowice']);        // osiedle w Boguszowicach Starych
+  assert.deepEqual([...detectDistricts('działka Gotartowice ul. Pochyła')], ['gotartowice']);
+  assert.deepEqual([...detectDistricts('Rybnik – Ligocka Kuźnia')], ['ligota']);
+  assert.deepEqual([...detectDistricts('Rybnik – Ligota-Ligocka Kuźnia, Jaśminowa')], ['ligota']);
+  assert.deepEqual([...detectDistricts('Rybnik – Kłokocin')], ['kłokocin']);
+  assert.deepEqual([...detectDistricts('Rybnik – Rybnik-Północ')], ['północ']);
+  assert.deepEqual([...detectDistricts('dom w dzielnicy Północ, ul. Karłowicza')], ['północ']);
+  assert.deepEqual([...detectDistricts('działka od północy graniczy z lasem')], []);  // kierunek świata ≠ dzielnica
+  assert.deepEqual([...detectDistricts('Rybnik – Śródmieście')], ['śródmieście']);
 });

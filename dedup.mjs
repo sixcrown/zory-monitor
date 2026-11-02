@@ -23,7 +23,7 @@ export function priceClose(a, b) {
   return within(a, b, 0.05);
 }
 
-// Dzielnice/sołectwa Żor — wzorce łapią też odmianę (w Roju, w Rogoźnej itd.).
+// Dzielnice/sołectwa Żor i Rybnika — wzorce łapią też odmianę (w Roju, w Boguszowicach itd.).
 const DISTRICT_PATTERNS = [
   ['rój', /\brój\b|\broju\b/],
   ['rogoźna', /rogo[źz]n/],
@@ -34,6 +34,14 @@ const DISTRICT_PATTERNS = [
   ['rowień', /rowie[ńn]/],
   ['folwarki', /folwark/],
   ['śródmieście', /[śs]r[óo]dmie[śs]/],
+  // Rybnik — wschodnie dzielnice od strony A1; Raszowiec to osiedle w Boguszowicach Starych,
+  // Otodom rozbija Ligotę-Ligocką Kuźnię na „Ligota" i „Ligocka Kuźnia".
+  ['boguszowice', /boguszowic|raszow/],
+  ['gotartowice', /gotartowic/],
+  ['ligota', /\bligot|ligock/],
+  ['kłokocin', /k[łl]okocin/],
+  // samo „północ" to kierunek świata — łapiemy tylko „Rybnik-Północ" i „dzielnica Północ"
+  ['północ', /rybnik[\s–-]*północ|dzielnic\w*\s+północ/],
 ];
 
 export function detectDistricts(text) {
@@ -41,11 +49,13 @@ export function detectDistricts(text) {
   return new Set(DISTRICT_PATTERNS.filter(([, re]) => re.test(t)).map(([name]) => name));
 }
 
-// Obie oferty deklarują znane dzielnice i żadna się nie pokrywa ⇒ to różne
+// Oba TYTUŁY deklarują znane dzielnice i żadna się nie pokrywa ⇒ to różne
 // nieruchomości, choćby cena i metraż pasowały (np. Rój vs Kleszczów).
+// Dzielnicy nadanej przez portal (pole `place`) nie bierzemy pod uwagę — bywa
+// błędna: ta sama działka na Otodomie „Rybnik-Północ", na N-O.pl „Boguszowice Stare".
 function districtConflict(a, b) {
-  const da = detectDistricts((a.place ?? '') + ' ' + (a.title ?? ''));
-  const db = detectDistricts((b.place ?? '') + ' ' + (b.title ?? ''));
+  const da = detectDistricts(a.title ?? '');
+  const db = detectDistricts(b.title ?? '');
   return da.size > 0 && db.size > 0 && ![...da].some(d => db.has(d));
 }
 

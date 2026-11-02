@@ -1,20 +1,26 @@
-// Monitoring nowych ogłoszeń sprzedaży DZIAŁEK i DOMÓW w Żorach (OLX + Otodom + N-O.pl).
-// Duble między portalami scalane (cena + metraż ±3%); uruchamiany przez Harmonogram
-// zadań Windows. Bez zależności npm (Node 20+). Testy: node --test.
+// Monitoring nowych ogłoszeń sprzedaży DZIAŁEK i DOMÓW w Żorach oraz we wschodnich dzielnicach
+// Rybnika od strony A1 (OLX + Otodom + N-O.pl). Duble między portalami scalane (cena + metraż);
+// uruchamiany przez Harmonogram zadań Windows. Bez zależności npm (Node 20+). Testy: node --test.
 // Nowe oferty => powiadomienie Windows (toast) + push ntfy + raport HTML (lokalnie i na Vercelu).
+// `node monitor.mjs --dry-run` — pobiera i renderuje do katalogu dry-run/, bez zapisu stanu,
+// powiadomień i publikacji (do sprawdzania zmian w parserach/konfiguracji).
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { renderReport, renderCatalog, zl } from './render.mjs';
-import { groupOffers, median, detectDisappearances } from './dedup.mjs';
+import { groupOffers, median, detectDisappearances, detectDistricts } from './dedup.mjs';
+import { REGIONS, RYBNIK_OTODOM_SLUGS, inRybnikArea } from './areas.mjs';
+import { parseNoDistricts, otodomPlace } from './parse.mjs';
 
+const DRY = process.argv.includes('--dry-run');
 const DIR = path.dirname(fileURLToPath(import.meta.url));
+const OUT_DIR = DRY ? path.join(DIR, 'dry-run') : DIR;
 const STATE_FILE = path.join(DIR, 'state.json');
 const HISTORY_FILE = path.join(DIR, 'history.json');
-const REPORT_FILE = path.join(DIR, 'report.html');
-const CATALOG_FILE = path.join(DIR, 'wszystkie.html');
+const REPORT_FILE = path.join(OUT_DIR, 'report.html');
+const CATALOG_FILE = path.join(OUT_DIR, 'wszystkie.html');
 const LOG_FILE = path.join(DIR, 'monitor.log');
 const TOAST_PS1 = path.join(DIR, 'toast.ps1');
 const PUBLIC_DIR = path.join(DIR, 'public');
@@ -26,45 +32,74 @@ const NO_COOLDOWN_FILE = path.join(DIR, 'no-cooldown.json');
 const ARCHIVE_FILE = path.join(DIR, 'archive.json');
 const TREND_FILE = path.join(DIR, 'trend.json');
 const readJson = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
+if (DRY) fs.mkdirSync(OUT_DIR, { recursive: true });
 
+const QUESTIONS = {
+  dzialki: [
+    'Czy teren ma MPZP i co dokładnie dopuszcza? Jeśli nie ma — czy wydano warunki zabudowy?',
+    'Media: które są W działce, a które tylko „w drodze"? Warunki i koszt przyłączy?',
+    'Czy jest bezpośredni dostęp do drogi publicznej? Jeśli przez służebność — jak uregulowana?',
+    'Numer księgi wieczystej — obciążenia, hipoteki, współwłaściciele?',
+    'Klasa gruntu — czy budowa wymaga wyłączenia z produkcji rolnej? Były badania geotechniczne?',
+    'Czy działka bywa podmokła / jak wygląda po większym deszczu? Jaki spadek terenu?',
+    'Czy granice są wznowione geodezyjnie (punkty graniczne, aktualna mapa)?',
+    'Co może powstać w sąsiedztwie (MPZP działek obok — usługi, produkcja, droga)?',
+    'Od kiedy oferta jest aktywna i dlaczego sprzedają? (pole do negocjacji)',
+  ],
+  domy: [
+    'Rok budowy i technologia? Czy i czym ocieplony?',
+    'Dach, fundamenty, wilgoć — stan i daty ostatnich remontów?',
+    'Instalacje: elektryka, hydraulika, ogrzewanie — czym grzane i ile kosztuje sezon?',
+    'Świadectwo charakterystyki energetycznej — jaka klasa?',
+    'Stan prawny: KW, obciążenia, czy budynek formalnie odebrany (pozwolenie na użytkowanie)?',
+    'Co zostaje w cenie (meble/AGD)? Jakie umowy na media przechodzą?',
+    'Powierzchnia i granice działki — czy ogrodzenie stoi w granicach?',
+    'Koszty stałe: podatek od nieruchomości, media, ewentualne opłaty?',
+    'Od kiedy ogłoszenie wisi, dlaczego sprzedają, czy cena do negocjacji?',
+  ],
+};
+
+const OLX_URL = (kind, city) => `https://www.olx.pl/nieruchomosci/${kind}/sprzedaz/${city}/?search%5Border%5D=created_at%3Adesc`;
+// Otodom: jedno zapytanie na wiele dzielnic naraz (slugi w areas.mjs); zły slug = HTTP 404
+const OTODOM_RYBNIK_URL = estate => 'https://www.otodom.pl/pl/wyniki/sprzedaz/' + estate + '/wiele-lokalizacji?locations='
+  + encodeURIComponent('[' + RYBNIK_OTODOM_SLUGS.map(s => 'slaskie/rybnik/rybnik/rybnik/' + s).join(',') + ']')
+  + '&by=LATEST&direction=DESC';
+
+// Kategoria = region × typ. Klucz trafia do state/history/archive/trend, więc nie zmieniać istniejących.
+// `keep` filtruje oferty po pobraniu (Rybnik: N-O.pl i OLX pobierają całe miasto, zostaje nasz obszar).
 const CATS = {
   dzialki: {
-    label: 'Działki',
-    icon: '🌱',
-    olx: 'https://www.olx.pl/nieruchomosci/dzialki/sprzedaz/zory/?search%5Border%5D=created_at%3Adesc',
+    region: 'zory', label: 'Działki', name: 'Działki Żory', icon: '🌱',
+    olx: OLX_URL('dzialki', 'zory'),
     otodom: 'https://www.otodom.pl/pl/wyniki/sprzedaz/dzialka/slaskie/zory/zory/zory?by=LATEST&direction=DESC',
-    no: 'https://zory.nieruchomosci-online.pl/szukaj.html?3,dzialka,sprzedaz,,%C5%BBory:359',
-    questions: [
-      'Czy teren ma MPZP i co dokładnie dopuszcza? Jeśli nie ma — czy wydano warunki zabudowy?',
-      'Media: które są W działce, a które tylko „w drodze"? Warunki i koszt przyłączy?',
-      'Czy jest bezpośredni dostęp do drogi publicznej? Jeśli przez służebność — jak uregulowana?',
-      'Numer księgi wieczystej — obciążenia, hipoteki, współwłaściciele?',
-      'Klasa gruntu — czy budowa wymaga wyłączenia z produkcji rolnej? Były badania geotechniczne?',
-      'Czy działka bywa podmokła / jak wygląda po większym deszczu? Jaki spadek terenu?',
-      'Czy granice są wznowione geodezyjnie (punkty graniczne, aktualna mapa)?',
-      'Co może powstać w sąsiedztwie (MPZP działek obok — usługi, produkcja, droga)?',
-      'Od kiedy oferta jest aktywna i dlaczego sprzedają? (pole do negocjacji)',
-    ],
+    no: 'https://zory.nieruchomosci-online.pl/szukaj.html?3,dzialka,sprzedaz,,%C5%BBory:359', noLocality: /żory/i,
+    questions: QUESTIONS.dzialki,
   },
   domy: {
-    label: 'Domy',
-    icon: '🏠',
-    olx: 'https://www.olx.pl/nieruchomosci/domy/sprzedaz/zory/?search%5Border%5D=created_at%3Adesc',
+    region: 'zory', label: 'Domy', name: 'Domy Żory', icon: '🏠',
+    olx: OLX_URL('domy', 'zory'),
     otodom: 'https://www.otodom.pl/pl/wyniki/sprzedaz/dom/slaskie/zory/zory/zory?by=LATEST&direction=DESC',
-    no: 'https://zory.nieruchomosci-online.pl/szukaj.html?3,dom,sprzedaz,,%C5%BBory:359',
-    questions: [
-      'Rok budowy i technologia? Czy i czym ocieplony?',
-      'Dach, fundamenty, wilgoć — stan i daty ostatnich remontów?',
-      'Instalacje: elektryka, hydraulika, ogrzewanie — czym grzane i ile kosztuje sezon?',
-      'Świadectwo charakterystyki energetycznej — jaka klasa?',
-      'Stan prawny: KW, obciążenia, czy budynek formalnie odebrany (pozwolenie na użytkowanie)?',
-      'Co zostaje w cenie (meble/AGD)? Jakie umowy na media przechodzą?',
-      'Powierzchnia i granice działki — czy ogrodzenie stoi w granicach?',
-      'Koszty stałe: podatek od nieruchomości, media, ewentualne opłaty?',
-      'Od kiedy ogłoszenie wisi, dlaczego sprzedają, czy cena do negocjacji?',
-    ],
+    no: 'https://zory.nieruchomosci-online.pl/szukaj.html?3,dom,sprzedaz,,%C5%BBory:359', noLocality: /żory/i,
+    questions: QUESTIONS.domy,
+  },
+  dzialki_rybnik: {
+    region: 'rybnik', label: 'Działki', name: 'Działki Rybnik', icon: '🌱',
+    olx: OLX_URL('dzialki', 'rybnik'),
+    otodom: OTODOM_RYBNIK_URL('dzialka'), otodomPages: 2,
+    no: 'https://rybnik.nieruchomosci-online.pl/szukaj.html?3,dzialka,sprzedaz,,Rybnik', noPages: 6, noLocality: /rybnik/i,
+    keep: inRybnikArea,
+    questions: QUESTIONS.dzialki,
+  },
+  domy_rybnik: {
+    region: 'rybnik', label: 'Domy', name: 'Domy Rybnik', icon: '🏠',
+    olx: OLX_URL('domy', 'rybnik'),
+    otodom: OTODOM_RYBNIK_URL('dom'), otodomPages: 2,
+    no: 'https://rybnik.nieruchomosci-online.pl/szukaj.html?3,dom,sprzedaz,,Rybnik', noPages: 5, noLocality: /rybnik/i,
+    keep: inRybnikArea,
+    questions: QUESTIONS.domy,
   },
 };
+const PORTALS = ['OLX', 'Otodom', 'N-O.pl'];
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
@@ -75,6 +110,7 @@ const HEADERS = {
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
+  if (DRY) return;
   try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch {}
 }
 
@@ -130,12 +166,20 @@ async function getOlx(cat, url) {
   });
 }
 
-async function getOtodom(cat, url) {
-  const html = await fetchHtml(url);
-  const m = html.match(/<script id="__NEXT_DATA__" type="application\/json"[^>]*>(.*?)<\/script>/s);
-  if (!m) throw new Error('Otodom: brak __NEXT_DATA__ (blokada albo zmiana struktury?)');
-  const items = JSON.parse(m[1])?.props?.pageProps?.data?.searchAds?.items;
-  if (!Array.isArray(items)) throw new Error('Otodom: brak listy ogłoszeń w danych (zmiana struktury?)');
+// Otodom: 36 ofert/stronę; strona powyżej pagination.totalPages zwraca listę OGÓLNOPOLSKĄ,
+// więc paginujemy wyłącznie w granicach podanych przez portal.
+async function getOtodom(cat, url, maxPages = 1) {
+  const items = [];
+  let totalPages = 1;
+  for (let p = 1; p <= Math.min(maxPages, totalPages); p++) {
+    const html = await fetchHtml(p === 1 ? url : `${url}&page=${p}`);
+    const m = html.match(/<script id="__NEXT_DATA__" type="application\/json"[^>]*>(.*?)<\/script>/s);
+    if (!m) throw new Error('Otodom: brak __NEXT_DATA__ (blokada albo zmiana struktury?)');
+    const data = JSON.parse(m[1])?.props?.pageProps?.data?.searchAds;
+    if (!Array.isArray(data?.items)) throw new Error('Otodom: brak listy ogłoszeń w danych (zmiana struktury?)');
+    items.push(...data.items);
+    totalPages = Number(data.pagination?.totalPages) || 1;
+  }
   return items.map(it => {
     const price = it.totalPrice?.value ?? null;
     const areaM2 = it.areaInSquareMeters ?? null;
@@ -150,7 +194,7 @@ async function getOtodom(cat, url) {
       pricePerM2: price && areaM2 ? Math.round(price / areaM2) : null,
       plotM2: it.terrainAreaInSquareMeters ?? null,
       kind: '',
-      place: it.locationLabel?.value ?? 'Żory',
+      place: otodomPlace(it.location, it.locationLabel?.value ?? ''),
       url: 'https://www.otodom.pl/pl/oferta/' + it.slug,
       created: it.dateCreatedFirst || it.dateCreated || null,
     };
@@ -159,7 +203,8 @@ async function getOtodom(cat, url) {
 
 // Nieruchomosci-online.pl: oferty siedzą w JSON-LD (CollectionPage), paginacja przez &p=N.
 // Lista nie podaje dat publikacji — datę dociągamy ze strony oferty tylko dla nowych.
-async function getNO(cat, baseUrl) {
+// Dzielnica ogłoszenia jest tylko w bloku śledzącym strony (parseNoDistricts).
+async function getNO(cat, baseUrl, { pages = 4, locality = /żory/i } = {}) {
   // po 429 respektujemy pauzę wskazaną przez serwer (plik-flaga trwa między przebiegami)
   let cd = null;
   try { cd = JSON.parse(fs.readFileSync(NO_COOLDOWN_FILE, 'utf8')); } catch {}
@@ -168,46 +213,50 @@ async function getNO(cat, baseUrl) {
   }
   try {
     const seen = new Map();
-    for (let p = 1; p <= 4; p++) {
+    for (let p = 1; p <= pages; p++) {
       if (p > 1) await new Promise(r => setTimeout(r, 4000)); // grzeczny odstęp — portal łatwo daje 429
       const url = p === 1 ? baseUrl : `${baseUrl}&p=${p}`;
       const html = await fetchHtml(url);
-    const m = html.match(/<script type="application\/ld\+json"[^>]*>(.*?)<\/script>/s);
-    if (!m) {
-      if (p === 1) throw new Error('N-O.pl: brak JSON-LD (zmiana struktury strony?)');
-      break;
-    }
-    let items = [];
-    try {
-      const j = JSON.parse(m[1]);
-      items = (j.mainEntity?.offers ?? []).flatMap(a => a.offers ?? []);
-    } catch {}
-    if (p === 1 && !items.length) throw new Error('N-O.pl: brak ofert w danych (zmiana struktury?)');
-    let added = 0;
-    for (const it of items) {
-      const idm = String(it.url ?? '').match(/(\d{6,})\.html/);
-      if (!idm || seen.has(idm[1])) continue;
-      // po wyczerpaniu ofert z Żor portal dokleja "oferty z okolicy" — pomijamy je
-      if (!/żory/i.test(String(it.itemOffered?.address?.addressLocality ?? ''))) continue;
-      added++;
-      const price = Number(it.price) || null;
-      const areaM2 = Math.round(Number(it.itemOffered?.floorSize?.value)) || null;
-      seen.set(idm[1], {
-        id: 'no-' + idm[1],
-        cat,
-        portal: 'N-O.pl',
-        title: it.name ?? 'oferta',
-        price,
-        priceText: zl(price),
-        areaM2,
-        pricePerM2: Math.round(Number(it.priceSpecification?.price)) || (price && areaM2 ? Math.round(price / areaM2) : null),
-        kind: '',
-        place: [it.itemOffered?.address?.streetAddress, it.itemOffered?.address?.addressLocality].filter(Boolean).join(', ') || 'Żory',
-        url: it.url,
-        created: null,
-        desc: String(it.itemOffered?.description ?? ''),
-      });
-    }
+      const m = html.match(/<script type="application\/ld\+json"[^>]*>(.*?)<\/script>/s);
+      if (!m) {
+        if (p === 1) throw new Error('N-O.pl: brak JSON-LD (zmiana struktury strony?)');
+        break;
+      }
+      let items = [];
+      try {
+        const j = JSON.parse(m[1]);
+        items = (j.mainEntity?.offers ?? []).flatMap(a => a.offers ?? []);
+      } catch {}
+      if (p === 1 && !items.length) throw new Error('N-O.pl: brak ofert w danych (zmiana struktury?)');
+      const districts = parseNoDistricts(html);
+      let added = 0;
+      for (const it of items) {
+        const idm = String(it.url ?? '').match(/(\d{6,})\.html/);
+        if (!idm || seen.has(idm[1])) continue;
+        const addr = it.itemOffered?.address ?? {};
+        const city = String(addr.addressLocality ?? '');
+        // po wyczerpaniu ofert z miasta portal dokleja "oferty z okolicy" — pomijamy je
+        if (!locality.test(city)) continue;
+        added++;
+        const price = Number(it.price) || null;
+        const areaM2 = Math.round(Number(it.itemOffered?.floorSize?.value)) || null;
+        const district = districts.get(idm[1]);
+        seen.set(idm[1], {
+          id: 'no-' + idm[1],
+          cat,
+          portal: 'N-O.pl',
+          title: it.name ?? 'oferta',
+          price,
+          priceText: zl(price),
+          areaM2,
+          pricePerM2: Math.round(Number(it.priceSpecification?.price)) || (price && areaM2 ? Math.round(price / areaM2) : null),
+          kind: '',
+          place: [district ? `${city} – ${district}` : city, addr.streetAddress].filter(Boolean).join(', '),
+          url: it.url,
+          created: null,
+          desc: String(it.itemOffered?.description ?? ''),
+        });
+      }
       if (!added) break;
     }
     fs.rmSync(NO_COOLDOWN_FILE, { force: true }); // sukces = pauza nieaktualna
@@ -289,11 +338,13 @@ const HOUSE_EXTRA = [
   { label: 'stan surowy', re: /stan surowy/i },
 ];
 
+const isPlot = cat => cat.startsWith('dzialki');
+
 function analyzeOffer(o, corpus) {
   const text = [o.title, o.kind, corpus ?? ''].join(' ');
   // bez treści ogłoszenia nie wolno twierdzić "brak wzmianki" — raportujemy tylko znaleziska z tytułu
   const canJudgeMissing = (corpus ?? '').length >= 40;
-  if (o.cat === 'dzialki') {
+  if (isPlot(o.cat)) {
     o.featHave = [
       ...PLOT_MEDIA.filter(c => c.re.test(text)).map(c => c.label + ' ✓'),
       ...PLOT_EXTRA.filter(c => c.re.test(text)).map(c => c.label),
@@ -333,7 +384,7 @@ function assess(o, stats) {
     const r = o.pricePerM2 / stats.medPpm;
     if (r <= 0.7) {
       verdict = `🟢 potencjalna okazja: ${Math.round((1 - r) * 100)}% poniżej mediany zł/m²`;
-      notes.push(o.cat === 'dzialki'
+      notes.push(isPlot(o.cat)
         ? 'tak niska cena bywa sygnałem problemów — sprawdź MPZP, dostęp do drogi, media i czy grunt nie jest rolny'
         : 'tak niska cena zwykle oznacza remont / stan surowy albo problem prawny — obejrzyj z fachowcem i sprawdź KW');
     } else if (r <= 0.9) verdict = `🟡 ${Math.round((1 - r) * 100)}% poniżej mediany zł/m²`;
@@ -406,16 +457,19 @@ function showToast(title, body) {
 
 // żądania do N-O.pl idą szeregowo, z odstępem — portal karze za równoległość (429)
 let noChain = Promise.resolve();
-function queuedGetNO(cat, url) {
-  const run = noChain.then(() => getNO(cat, url));
+function queuedGetNO(cat, url, opts) {
+  const run = noChain.then(() => getNO(cat, url, opts));
   noChain = run.catch(() => {}).then(() => new Promise(r => setTimeout(r, 5000)));
   return run;
 }
 
+// filtr obszaru (np. tylko wschodnie dzielnice Rybnika) stosowany tuż po pobraniu źródła
+const keepOf = cfg => list => (cfg.keep ? list.filter(cfg.keep) : list);
+
 const jobs = Object.entries(CATS).flatMap(([cat, cfg]) => [
-  { portal: 'OLX', cat, p: getOlx(cat, cfg.olx) },
-  { portal: 'Otodom', cat, p: getOtodom(cat, cfg.otodom) },
-  { portal: 'N-O.pl', cat, p: queuedGetNO(cat, cfg.no) },
+  { portal: 'OLX', cat, p: getOlx(cat, cfg.olx).then(keepOf(cfg)) },
+  { portal: 'Otodom', cat, p: getOtodom(cat, cfg.otodom, cfg.otodomPages).then(keepOf(cfg)) },
+  { portal: 'N-O.pl', cat, p: queuedGetNO(cat, cfg.no, { pages: cfg.noPages, locality: cfg.noLocality }).then(keepOf(cfg)) },
 ]);
 const results = await Promise.allSettled(jobs.map(j => j.p));
 const offers = [];
@@ -425,15 +479,17 @@ results.forEach((r, i) => {
   if (r.status === 'fulfilled') offers.push(...r.value);
   else {
     failedSources.add(jobs[i].portal + '|' + jobs[i].cat);
-    errors.push(`${CATS[jobs[i].cat].label}/${jobs[i].portal}: ${r.reason.message}`);
+    errors.push(`${CATS[jobs[i].cat].name}/${jobs[i].portal}: ${r.reason.message}`);
   }
 });
 if (errors.length) log('UWAGA, częściowa awaria: ' + errors.join(' | '));
 
 if (!offers.length) {
   log('BŁĄD: żaden portal nie odpowiedział.');
-  await showToast('Monitoring nieruchomości: awaria', 'Nie udało się pobrać żadnego portalu. Szczegóły w monitor.log.');
-  await sendNtfy('Monitoring Żory: awaria', 'Nie udało się pobrać żadnego portalu — sprawdź monitor.log na PC.', 2);
+  if (!DRY) {
+    await showToast('Monitoring nieruchomości: awaria', 'Nie udało się pobrać żadnego portalu. Szczegóły w monitor.log.');
+    await sendNtfy('Monitoring Żory: awaria', 'Nie udało się pobrać żadnego portalu — sprawdź monitor.log na PC.', 2);
+  }
   process.exit(1);
 }
 
@@ -446,6 +502,7 @@ const unique = [...new Map(offers.map(o => [o.id, o])).values()];
 // Grupy dubli: ta sama nieruchomość na kilku portalach. Kanoniczna oferta
 // reprezentuje grupę wszędzie dalej (statystyki, raport, powiadomienia).
 const preKnown = new Set(Object.keys(state.seen)); // znane PRZED tym przebiegiem
+const knownCats = new Set(Object.values(state.seen).map(r => r.cat)); // kategorie z jakąkolwiek historią
 const groups = groupOffers(unique);
 const groupOf = new Map(groups.flatMap(g => g.map(o => [o.id, g])));
 const deduped = groups.map(g => Object.assign(g[0], { mirrors: g.slice(1).map(m => ({ portal: m.portal, url: m.url })) }));
@@ -493,12 +550,21 @@ const uniqueDrops = [...dropByGroup.values()];
 const FLOOD_LIMIT = 25;
 const flooded = new Set();
 if (!firstRun) {
+  // nowo dodana kategoria (np. Rybnik) też startuje cichym baseline'em — jak pierwsze uruchomienie
+  for (const cat of Object.keys(CATS)) {
+    if (knownCats.has(cat)) continue;
+    const n = fresh.filter(o => o.cat === cat).length;
+    if (!n) continue;
+    for (const portal of PORTALS) flooded.add(portal + '|' + cat);
+    log(`Nowa kategoria ${CATS[cat].name}: zapamiętano ${n} istniejących ofert jako baseline — bez powiadomień.`);
+  }
   for (const portal of new Set(fresh.map(o => o.portal))) {
     for (const cat of Object.keys(CATS)) {
+      if (flooded.has(portal + '|' + cat)) continue;
       const n = fresh.filter(o => o.portal === portal && o.cat === cat).length;
       if (n > FLOOD_LIMIT) {
         flooded.add(portal + '|' + cat);
-        log(`Cichy baseline źródła ${portal}/${cat}: ${n} nieznanych ofert naraz — bez powiadomień.`);
+        log(`Cichy baseline źródła ${portal}/${CATS[cat].name}: ${n} nieznanych ofert naraz — bez powiadomień.`);
       }
     }
   }
@@ -525,6 +591,11 @@ for (const o of news) {
   if (o.created && state.seen[o.id] && !state.seen[o.id].created) state.seen[o.id].created = o.created;
   delete o.desc;
 }
+// dzielnice rozpoznane także z opisu (filtr „dzielnica" w katalogu); opisy dalej niepotrzebne
+for (const o of unique) {
+  o.districts = [...detectDistricts([o.place, o.title, o.desc].filter(Boolean).join(' '))];
+  delete o.desc;
+}
 
 // oferta "nowa" dla nas, ale utworzona >3 dni temu = raczej odświeżona/podbita
 for (const o of news) {
@@ -543,19 +614,25 @@ for (const o of news) {
   o.notes = [...a.notes, ...(o.notes ?? [])];
 }
 
-// Punkt trendu tylko z pełnych przebiegów — częściowe dane skrzywiłyby medianę.
+// Punkt trendu tylko dla kategorii, której wszystkie źródła odpowiedziały — częściowe
+// dane skrzywiłyby medianę (awaria jednego regionu nie blokuje trendu drugiego).
 const trend = readJson(TREND_FILE, []);
-if (!errors.length) {
+{
   const today = now.slice(0, 10);
+  let changed = false;
   for (const cat of Object.keys(CATS)) {
+    if ([...failedSources].some(src => src.endsWith('|' + cat))) continue;
     const s = statsByCat[cat];
     if (!s?.medPpm) continue;
     const point = { date: today, cat, medPpm: s.medPpm, count: s.count };
     const i = trend.findIndex(t => t.date === today && t.cat === cat);
     if (i >= 0) trend[i] = point; else trend.push(point);
+    changed = true;
   }
-  if (trend.length > 1500) trend.splice(0, trend.length - 1500);
-  fs.writeFileSync(TREND_FILE, JSON.stringify(trend));
+  if (changed && !DRY) {
+    if (trend.length > 1500) trend.splice(0, trend.length - 1500);
+    fs.writeFileSync(TREND_FILE, JSON.stringify(trend));
+  }
 }
 
 // Zniknięcia: nieobecne ≥3 dni, poza awariami portali; żywy dubel = nie znikła.
@@ -568,7 +645,7 @@ if (!firstRun) {
     archive.length = Math.min(archive.length, 500);
     log(`Zniknięte oferty: ${archived.length} → archiwum (np. ${archived[0].title}).`);
   }
-  fs.writeFileSync(ARCHIVE_FILE, JSON.stringify(archive, null, 1));
+  if (!DRY) fs.writeFileSync(ARCHIVE_FILE, JSON.stringify(archive, null, 1));
 }
 
 // przytnij stan, żeby nie rósł w nieskończoność
@@ -577,10 +654,10 @@ if (entries.length > 6000) {
   entries.sort((a, b) => String(a[1].firstSeen).localeCompare(String(b[1].firstSeen)));
   state.seen = Object.fromEntries(entries.slice(entries.length - 6000));
 }
-fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 1));
+if (!DRY) fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 1));
 
 const perCat = cat => deduped.filter(o => o.cat === cat).length;
-const counts = Object.entries(CATS).map(([cat, cfg]) => `${cfg.label}: ${perCat(cat)}`).join(', ');
+const counts = Object.entries(CATS).map(([cat, cfg]) => `${cfg.name}: ${perCat(cat)}`).join(', ');
 
 // pełny katalog aktualnych ofert (z dniami na rynku i łączną obniżką) — dla podstrony
 // "wszystkie" i jako baza sekcji negocjacyjnej (60+ dni na rynku albo obniżka ≥5%)
@@ -605,31 +682,42 @@ if (!firstRun && (news.length || uniqueDrops.length)) {
   history.unshift({ at: now, offers: news, drops: uniqueDrops });
   history.length = Math.min(history.length, 100);
 }
-fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 1));
+if (!DRY) fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 1));
 
 // raport i katalog renderujemy i publikujemy co przebieg — statystyki mają być aktualne
 fs.writeFileSync(REPORT_FILE, renderReport(CATS, history, statsByCat, negoByCat, trend));
 fs.writeFileSync(CATALOG_FILE, renderCatalog(CATS, catalogByCat, statsByCat, archive));
-await deployReport();
+if (!DRY) await deployReport();
 
 if (firstRun) {
   log(`Pierwsze uruchomienie: zapamiętano ${unique.length} istniejących ofert (${counts}). Bez powiadomienia.`);
 } else if (news.length || uniqueDrops.length) {
-  const parts = Object.entries(CATS)
-    .map(([cat, cfg]) => [cfg.label, news.filter(o => o.cat === cat).length])
-    .filter(([, n]) => n > 0)
-    .map(([l, n]) => `${n} × ${l.toLowerCase().replace(/y$/, '')}`);
-  if (uniqueDrops.length) parts.push(`${uniqueDrops.length} × obniżka`);
-  const title = `Żory: ${parts.join(', ')}`;
+  // tytuł grupowany po regionie: „Żory: 2 × działki, 1 × obniżka · Rybnik: 1 × dom"
+  const regionOf = cat => CATS[cat]?.region;
+  const short = cat => REGIONS[regionOf(cat)]?.short ?? '';
+  const parts = Object.keys(REGIONS).map(region => {
+    const bits = Object.entries(CATS)
+      .filter(([, cfg]) => cfg.region === region)
+      .map(([cat, cfg]) => [cfg.label, news.filter(o => o.cat === cat).length])
+      .filter(([, n]) => n > 0)
+      .map(([l, n]) => `${n} × ${l.toLowerCase().replace(/y$/, '')}`);
+    const nd = uniqueDrops.filter(d => regionOf(d.cat) === region).length;
+    if (nd) bits.push(`${nd} × obniżka`);
+    return bits.length ? `${REGIONS[region].short}: ${bits.join(', ')}` : null;
+  }).filter(Boolean);
+  const title = parts.join(' · ');
   const lines = [
-    ...news.slice(0, 4).map(o => `• ${o.title} — ${o.priceText}${o.verdict ? ' ' + o.verdict.slice(0, 2) : ''}${o.maybeRefresh ? ` ♻ odświeżona${o.refreshed ? ' ' + String(o.refreshed).slice(0, 10) : ''}` : ''}`),
-    ...uniqueDrops.slice(0, 3).map(d => `↓ ${d.title}: ${zl(d.oldPrice)} → ${zl(d.newPrice)} (-${d.dropPct}%)`),
+    ...news.slice(0, 4).map(o => `• ${short(o.cat)} · ${o.title} — ${o.priceText}${o.verdict ? ' ' + o.verdict.slice(0, 2) : ''}${o.maybeRefresh ? ` ♻ odświeżona${o.refreshed ? ' ' + String(o.refreshed).slice(0, 10) : ''}` : ''}`),
+    ...uniqueDrops.slice(0, 3).map(d => `↓ ${short(d.cat)} · ${d.title}: ${zl(d.oldPrice)} → ${zl(d.newPrice)} (-${d.dropPct}%)`),
   ];
   const extra = news.length + uniqueDrops.length - lines.length;
   const body = (lines.join('\n') + (extra > 0 ? `\n(+${extra} więcej)` : '')).slice(0, 400);
   const hot = news.some(o => o.verdict?.startsWith('🟢')) || uniqueDrops.some(d => d.dropPct >= 10);
-  await showToast(title, body.replace(/\n/g, '  ·  '));
-  await sendNtfy(title, body, hot ? 4 : 3);
+  if (DRY) log(`[dry-run] powiadomienie: ${title}\n${body}`);
+  else {
+    await showToast(title, body.replace(/\n/g, '  ·  '));
+    await sendNtfy(title, body, hot ? 4 : 3);
+  }
   log(`NOWE: ${news.length}, OBNIŻKI: ${uniqueDrops.length} (${counts})`);
 } else {
   log(`Nic nowego (${counts}, w bazie ${Object.keys(state.seen).length} ofert).`);

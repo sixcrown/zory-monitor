@@ -14,3 +14,9 @@ public/wszystkie.html
 public/.vercel/
 .vercel/
 .env*
+
+# wyjście trybu --dry-run
+dry-run/
+
+# artefakty Playwright (zrzuty ekranu z weryfikacji)
+.playwright-mcp/
