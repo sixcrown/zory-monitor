@@ -42,6 +42,10 @@ const DISTRICT_PATTERNS = [
   ['kłokocin', /k[łl]okocin/],
   // samo „północ" to kierunek świata — łapiemy tylko „Rybnik-Północ" i „dzielnica Północ"
   ['północ', /rybnik[\s–-]*północ|dzielnic\w*\s+północ/],
+  // Świerklany (gmina Świerklany, przy węźle A1 „Świerklany"): od 2024 jedna wieś, portale nie
+  // rozróżniają już Górnych i Dolnych. Odmiana: Świerklan, Świerklanach; nie łapać Świerklańca.
+  ['świerklany', /[śs]wierklan(?:y|ach|om|ami)?\b/],
+  ['świerklany-dolne', /[śs]wierklan\w*\s+doln/],
 ];
 
 export function detectDistricts(text) {

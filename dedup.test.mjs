@@ -165,3 +165,13 @@ test('detectDistricts: wschodnie dzielnice Rybnika (zjazd z A1)', () => {
   assert.deepEqual([...detectDistricts('działka od północy graniczy z lasem')], []);  // kierunek świata ≠ dzielnica
   assert.deepEqual([...detectDistricts('Rybnik – Śródmieście')], ['śródmieście']);
 });
+
+test('detectDistricts: Świerklany z odmianą, Dolne osobno, Świerklaniec nie', () => {
+  assert.deepEqual([...detectDistricts('Świerklany, Szeroka')], ['świerklany']);
+  assert.deepEqual([...detectDistricts('działka w Świerklanach Górnych przy ul. Szerockiej')], ['świerklany']);
+  assert.deepEqual([...detectDistricts('Dom pod Rybnikiem – Świerklany | 179 m²')], ['świerklany']);
+  assert.deepEqual([...detectDistricts('10 min do Świerklan')], ['świerklany']);
+  assert.deepEqual([...detectDistricts('Świerklany Dolne, ul. Rybnicka')], ['świerklany', 'świerklany-dolne']);
+  assert.deepEqual([...detectDistricts('w Świerklanach Dolnych')], ['świerklany', 'świerklany-dolne']);
+  assert.deepEqual([...detectDistricts('Świerklaniec, powiat tarnogórski')], []);
+});

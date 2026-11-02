@@ -11,8 +11,9 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { renderReport, renderCatalog, zl } from './render.mjs';
 import { groupOffers, median, detectDisappearances, detectDistricts } from './dedup.mjs';
-import { REGIONS, RYBNIK_OTODOM_SLUGS, inRybnikArea } from './areas.mjs';
+import { REGIONS, RYBNIK_OTODOM_LOCATIONS, inRybnikArea } from './areas.mjs';
 import { parseNoDistricts, otodomPlace } from './parse.mjs';
+import { olxUrls, noSources, sourceHash } from './sources.mjs';
 
 const DRY = process.argv.includes('--dry-run');
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -60,13 +61,16 @@ const QUESTIONS = {
 };
 
 const OLX_URL = (kind, city) => `https://www.olx.pl/nieruchomosci/${kind}/sprzedaz/${city}/?search%5Border%5D=created_at%3Adesc`;
-// Otodom: jedno zapytanie na wiele dzielnic naraz (slugi w areas.mjs); zły slug = HTTP 404
+// Otodom: jedno zapytanie na wiele lokalizacji naraz (ścieżki w areas.mjs); zła ścieżka = HTTP 404
 const OTODOM_RYBNIK_URL = estate => 'https://www.otodom.pl/pl/wyniki/sprzedaz/' + estate + '/wiele-lokalizacji?locations='
-  + encodeURIComponent('[' + RYBNIK_OTODOM_SLUGS.map(s => 'slaskie/rybnik/rybnik/rybnik/' + s).join(',') + ']')
+  + encodeURIComponent('[' + RYBNIK_OTODOM_LOCATIONS.join(',') + ']')
   + '&by=LATEST&direction=DESC';
+// N-O.pl zna tylko wieś „Świerklany" (bez podziału na Górne/Dolne); lista bez id miejscowości
+const NO_SWIERKLANY_URL = kind => `https://swierklany.nieruchomosci-online.pl/szukaj.html?3,${kind},sprzedaz,,%C5%9Awierklany`;
 
 // Kategoria = region × typ. Klucz trafia do state/history/archive/trend, więc nie zmieniać istniejących.
 // `keep` filtruje oferty po pobraniu (Rybnik: N-O.pl i OLX pobierają całe miasto, zostaje nasz obszar).
+// `olx` i `no` mogą być listą źródeł (Rybnik: miasto + Świerklany) — patrz sources.mjs.
 const CATS = {
   dzialki: {
     region: 'zory', label: 'Działki', name: 'Działki Żory', icon: '🌱',
@@ -84,17 +88,23 @@ const CATS = {
   },
   dzialki_rybnik: {
     region: 'rybnik', label: 'Działki', name: 'Działki Rybnik', icon: '🌱',
-    olx: OLX_URL('dzialki', 'rybnik'),
-    otodom: OTODOM_RYBNIK_URL('dzialka'), otodomPages: 2,
-    no: 'https://rybnik.nieruchomosci-online.pl/szukaj.html?3,dzialka,sprzedaz,,Rybnik', noPages: 6, noLocality: /rybnik/i,
+    olx: [OLX_URL('dzialki', 'rybnik'), OLX_URL('dzialki', 'swierklany')],
+    otodom: OTODOM_RYBNIK_URL('dzialka'), otodomPages: 3,
+    no: [
+      { url: 'https://rybnik.nieruchomosci-online.pl/szukaj.html?3,dzialka,sprzedaz,,Rybnik', pages: 6, locality: /rybnik/i },
+      { url: NO_SWIERKLANY_URL('dzialka'), pages: 2, locality: /świerklany/i },
+    ],
     keep: inRybnikArea,
     questions: QUESTIONS.dzialki,
   },
   domy_rybnik: {
     region: 'rybnik', label: 'Domy', name: 'Domy Rybnik', icon: '🏠',
-    olx: OLX_URL('domy', 'rybnik'),
-    otodom: OTODOM_RYBNIK_URL('dom'), otodomPages: 2,
-    no: 'https://rybnik.nieruchomosci-online.pl/szukaj.html?3,dom,sprzedaz,,Rybnik', noPages: 5, noLocality: /rybnik/i,
+    olx: [OLX_URL('domy', 'rybnik'), OLX_URL('domy', 'swierklany')],
+    otodom: OTODOM_RYBNIK_URL('dom'), otodomPages: 3,
+    no: [
+      { url: 'https://rybnik.nieruchomosci-online.pl/szukaj.html?3,dom,sprzedaz,,Rybnik', pages: 5, locality: /rybnik/i },
+      { url: NO_SWIERKLANY_URL('dom'), pages: 2, locality: /świerklany/i },
+    ],
     keep: inRybnikArea,
     questions: QUESTIONS.domy,
   },
@@ -213,6 +223,7 @@ async function getNO(cat, baseUrl, { pages = 4, locality = /żory/i } = {}) {
   }
   try {
     const seen = new Map();
+    let limit = Infinity; // „Zobacz N ogłoszeń" ze strony 1 — patrz niżej
     for (let p = 1; p <= pages; p++) {
       if (p > 1) await new Promise(r => setTimeout(r, 4000)); // grzeczny odstęp — portal łatwo daje 429
       const url = p === 1 ? baseUrl : `${baseUrl}&p=${p}`;
@@ -226,11 +237,16 @@ async function getNO(cat, baseUrl, { pages = 4, locality = /żory/i } = {}) {
       try {
         const j = JSON.parse(m[1]);
         items = (j.mainEntity?.offers ?? []).flatMap(a => a.offers ?? []);
+        // „Zobacz N ogłoszeń …" w opisie strony = prawdziwa liczba ofert z miejscowości. Dalsze
+        // pozycje to „oferty z okolicy" (inna miejscowość), a KOLEJNE STRONY — archiwalia z tą
+        // samą miejscowością (Świerklany: 19 żywych, potem 60+ archiwalnych). Więcej nie bierzemy.
+        if (p === 1) limit = Number((j.description ?? '').match(/Zobacz (\d+) ogłosze/)?.[1]) || Infinity;
       } catch {}
       if (p === 1 && !items.length) throw new Error('N-O.pl: brak ofert w danych (zmiana struktury?)');
       const districts = parseNoDistricts(html);
       let added = 0;
       for (const it of items) {
+        if (seen.size >= limit) break;
         const idm = String(it.url ?? '').match(/(\d{6,})\.html/);
         if (!idm || seen.has(idm[1])) continue;
         const addr = it.itemOffered?.address ?? {};
@@ -257,7 +273,7 @@ async function getNO(cat, baseUrl, { pages = 4, locality = /żory/i } = {}) {
           desc: String(it.itemOffered?.description ?? ''),
         });
       }
-      if (!added) break;
+      if (!added || seen.size >= limit) break;
     }
     fs.rmSync(NO_COOLDOWN_FILE, { force: true }); // sukces = pauza nieaktualna
     return [...seen.values()];
@@ -466,10 +482,12 @@ function queuedGetNO(cat, url, opts) {
 // filtr obszaru (np. tylko wschodnie dzielnice Rybnika) stosowany tuż po pobraniu źródła
 const keepOf = cfg => list => (cfg.keep ? list.filter(cfg.keep) : list);
 
+// źródło portalu bywa listą (Rybnik: miasto + Świerklany) — wyniki sklejamy; awaria
+// dowolnej części = awaria całego źródła (ochrona zniknięć i trendu zostaje konserwatywna)
 const jobs = Object.entries(CATS).flatMap(([cat, cfg]) => [
-  { portal: 'OLX', cat, p: getOlx(cat, cfg.olx).then(keepOf(cfg)) },
+  { portal: 'OLX', cat, p: Promise.all(olxUrls(cfg).map(u => getOlx(cat, u))).then(ls => keepOf(cfg)(ls.flat())) },
   { portal: 'Otodom', cat, p: getOtodom(cat, cfg.otodom, cfg.otodomPages).then(keepOf(cfg)) },
-  { portal: 'N-O.pl', cat, p: queuedGetNO(cat, cfg.no, { pages: cfg.noPages, locality: cfg.noLocality }).then(keepOf(cfg)) },
+  { portal: 'N-O.pl', cat, p: Promise.all(noSources(cfg).map(s => queuedGetNO(cat, s.url, { pages: s.pages, locality: s.locality }))).then(ls => keepOf(cfg)(ls.flat())) },
 ]);
 const results = await Promise.allSettled(jobs.map(j => j.p));
 const offers = [];
@@ -558,6 +576,19 @@ if (!firstRun) {
     for (const portal of PORTALS) flooded.add(portal + '|' + cat);
     log(`Nowa kategoria ${CATS[cat].name}: zapamiętano ${n} istniejących ofert jako baseline — bez powiadomień.`);
   }
+  // zmiana konfiguracji źródła (np. doszły Świerklany) — pierwszy udany przebieg po zmianie
+  // też jest cichym baseline'em tego źródła; odcisk zapisujemy niżej dopiero po udanym pobraniu
+  for (const [cat, cfg] of Object.entries(CATS)) {
+    if (!knownCats.has(cat)) continue;
+    for (const portal of PORTALS) {
+      const key = portal + '|' + cat;
+      if (failedSources.has(key) || flooded.has(key) || state.sources?.[key] === sourceHash(portal, cfg)) continue;
+      const n = fresh.filter(o => o.portal === portal && o.cat === cat).length;
+      if (!n) continue;
+      flooded.add(key);
+      log(`Zmiana źródeł ${portal}/${cfg.name}: zapamiętano ${n} nieznanych ofert jako baseline — bez powiadomień.`);
+    }
+  }
   for (const portal of new Set(fresh.map(o => o.portal))) {
     for (const cat of Object.keys(CATS)) {
       if (flooded.has(portal + '|' + cat)) continue;
@@ -567,6 +598,13 @@ if (!firstRun) {
         log(`Cichy baseline źródła ${portal}/${CATS[cat].name}: ${n} nieznanych ofert naraz — bez powiadomień.`);
       }
     }
+  }
+}
+// odciski konfiguracji źródeł, które w tym przebiegu odpowiedziały (patrz „Zmiana źródeł" wyżej)
+state.sources ??= {};
+for (const [cat, cfg] of Object.entries(CATS)) {
+  for (const portal of PORTALS) {
+    if (!failedSources.has(portal + '|' + cat)) state.sources[portal + '|' + cat] = sourceHash(portal, cfg);
   }
 }
 // Pushuje tylko kanoniczna świeżej grupy i tylko gdy żaden inny wpis grupy nie
@@ -671,10 +709,10 @@ for (const cat of Object.keys(CATS)) {
     const dropPct = first && o.price && o.price < first ? Math.round((1 - o.price / first) * 100) : 0;
     return { ...o, dropPct, dom: daysOn(o.created ?? rec.firstSeen) };
   });
+  // bez limitu — sekcja jest zwinięta (<details>), więc długa lista nie wydłuża strony
   negoByCat[cat] = catalogByCat[cat]
     .filter(o => (o.dom ?? 0) >= 60 || o.dropPct >= 5)
-    .sort((a, b) => (b.dropPct - a.dropPct) || ((b.dom ?? 0) - (a.dom ?? 0)))
-    .slice(0, 10);
+    .sort((a, b) => (b.dropPct - a.dropPct) || ((b.dom ?? 0) - (a.dom ?? 0)));
 }
 
 const history = !firstRun && fs.existsSync(HISTORY_FILE) ? JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) : [];

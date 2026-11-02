@@ -1,7 +1,7 @@
-# zory-monitor — monitoring działek i domów w Żorach i wschodnim Rybniku
+# zory-monitor — monitoring działek i domów w Żorach, wschodnim Rybniku i Świerklanach
 
 Skrypt sprawdza nowe ogłoszenia sprzedaży **działek i domów** w Żorach oraz we wschodnich
-dzielnicach Rybnika od strony A1 na **OLX**, **Otodom** i **Nieruchomosci-online.pl** i przy
+dzielnicach Rybnika od strony A1 oraz w Świerklanach na **OLX**, **Otodom** i **Nieruchomosci-online.pl** i przy
 nowych ofertach pokazuje powiadomienie Windows (kliknięcie otwiera `report.html`).
 
 ## Obszary
@@ -9,9 +9,11 @@ nowych ofertach pokazuje powiadomienie Windows (kliknięcie otwiera `report.html
 Dwa regiony liczone osobno (własne mediany, trend, sekcje raportu, powiadomienia „Żory: … · Rybnik: …"):
 
 - **Żory** — całe miasto (jak dotąd).
-- **Rybnik — wschód (zjazd z A1)** — tylko dzielnice: Rybnik-Północ, Boguszowice (Stare, Osiedle,
-  Raszowiec), Gotartowice, Ligota-Ligocka Kuźnia, Kłokocin. Lista w `areas.mjs`
-  (`RYBNIK_AREA` + slugi Otodomu `RYBNIK_OTODOM_SLUGS`), wzorce nazw w `DISTRICT_PATTERNS` w `dedup.mjs`.
+- **Rybnik — wschód (zjazd z A1) i Świerklany** — tylko dzielnice: Rybnik-Północ, Boguszowice (Stare, Osiedle,
+  Raszowiec), Gotartowice, Ligota-Ligocka Kuźnia, Kłokocin, plus wieś Świerklany (gmina Świerklany, węzeł A1
+  „Świerklany"). Lista w `areas.mjs` (`RYBNIK_AREA` + ścieżki Otodomu `RYBNIK_OTODOM_LOCATIONS`), wzorce nazw
+  w `DISTRICT_PATTERNS` w `dedup.mjs`. Świerklany Górne i Dolne są od 2024 jedną wsią i portale ich nie
+  rozróżniają — bierzemy całe Świerklany, odrzucając tylko oferty wprost opisane jako Dolne.
 
 Jak portale są zawężane do dzielnic: Otodom — jedno zapytanie „wiele lokalizacji" po slugach
 dzielnic (zły slug = 404 całego zapytania; paginacja tylko do `totalPages`, bo dalej portal zwraca
@@ -20,14 +22,22 @@ listę ogólnopolską); N-O.pl — lista całego Rybnika + dzielnica ogłoszenia
 całego Rybnika + filtr po tytule/opisie (OLX nie podaje dzielnic Rybnika). Oferta bez żadnej
 wzmianki o dzielnicy docelowej jest pomijana.
 
+Źródło portalu może być listą (Rybnik: miasto + Świerklany, helpery w `sources.mjs`); wyniki części są
+sklejane, awaria dowolnej części liczy się jako awaria źródła.
+
 Nowo dodana kategoria (bez wpisów w `state.json`) startuje po cichu jako baseline — bez lawiny
-„nowych" ofert. Trend zł/m² zapisywany jest per kategoria, której wszystkie źródła odpowiedziały.
+„nowych" ofert. Tak samo zmiana konfiguracji źródła (nowy URL, dodatkowa miejscowość): `state.sources`
+trzyma odcisk konfiguracji każdego źródła i pierwszy udany przebieg po zmianie zapamiętuje nieznane
+oferty bez powiadomień. Trend zł/m² zapisywany jest per kategoria, której wszystkie źródła odpowiedziały.
 
 `node monitor.mjs --dry-run` — pełny przebieg do katalogu `dry-run/` bez zapisu stanu, powiadomień
 i publikacji (do sprawdzania parserów i konfiguracji).
 
 Uwagi o N-O.pl: lista nie podaje dat publikacji (data dociągana ze strony oferty dla nowych),
-portal dokleja "oferty z okolicy" (filtrujemy tylko Żory) i łatwo daje HTTP 429 przy zbyt częstych
+strona listy ma zawsze 41 pozycji: najpierw żywe oferty z miejscowości (tyle, ile mówi „Zobacz N ogłoszeń"
+w opisie strony), potem "oferty z okolicy" (inna miejscowość — odfiltrowane), a resztę i kolejne strony
+wypełniają archiwalne oferty z tą samą miejscowością — dlatego bierzemy najwyżej N ofert i kończymy
+paginację po ich osiągnięciu. Portal łatwo daje HTTP 429 przy zbyt częstych
 żądaniach. Obrona: żądania do tego portalu idą szeregowo (nigdy równolegle, 5 s między kategoriami),
 między stronami paginacji 4 s przerwy, 2 s po każdym pobraniu szczegółów oferty; przy 429 skrypt
 odpuszcza od razu i zapisuje pauzę na czas z nagłówka Retry-After (plik `no-cooldown.json`,
@@ -90,7 +100,7 @@ i podlinkowanego projektu w `public/.vercel` — bez tego krok jest pomijany).
 |---|---|
 | `monitor.mjs` | główny skrypt (Node 20+, bez zależności npm) |
 | `dedup.mjs` / `render.mjs` | logika dubli i zniknięć / renderowanie HTML (+ testy `*.test.mjs`) |
-| `areas.mjs` / `parse.mjs` | regiony i dzielnice Rybnika (filtr obszaru) / czyste parsery danych portali |
+| `areas.mjs` / `parse.mjs` / `sources.mjs` | regiony i dzielnice (filtr obszaru) / czyste parsery danych portali / kształt i odcisk konfiguracji źródeł |
 | `archive.json` / `trend.json` | oferty zniknięte / dzienne mediany zł/m² |
 | `toast.ps1` | powiadomienie Windows |
 | `run-monitor.vbs` | ukryty launcher dla Harmonogramu zadań |

@@ -67,7 +67,7 @@ test('renderArchive: mediany i wpis z 30 dni', () => {
 test('renderReport: sekcje per region w kolejności Żory → Rybnik, przyklejony pasek z kotwicami', () => {
   const html = renderReport(CATS, [], STATS, {});
   assert.match(html, /<h2 class="region" id="region-zory">Żory<\/h2>/);
-  assert.match(html, /<h2 class="region" id="region-rybnik">Rybnik — wschód \(zjazd z A1\)<\/h2>/);
+  assert.match(html, /<h2 class="region" id="region-rybnik">Rybnik — wschód \(zjazd z A1\) i Świerklany<\/h2>/);
   assert.ok(html.indexOf('id="region-zory"') < html.indexOf('id="region-rybnik"'));
   assert.match(html, /<nav class="top">.*<a href="#region-zory"><b>Żory<\/b><\/a> <a href="#cat-dzialki">🌱 działki<\/a> <a href="#cat-domy">🏠 domy<\/a>/);
   assert.match(html, /<a href="#region-rybnik"><b>Rybnik<\/b><\/a> <a href="#cat-dzialki_rybnik">/);
@@ -113,10 +113,11 @@ test('renderReport: stare przebiegi zwinięte w details.older, świeże rozwini�
 test('renderCatalog: optgroup dzielnic per region, nagłówek sekcji z regionem', () => {
   const html = renderCatalog(CATS, { dzialki: [OFERTA], domy: [] }, STATS);
   assert.match(html, /<optgroup label="Żory">/);
-  assert.match(html, /<optgroup label="Rybnik — wschód \(zjazd z A1\)">/);
+  assert.match(html, /<optgroup label="Rybnik — wschód \(zjazd z A1\) i Świerklany">/);
+  assert.match(html, /<option value="świerklany">Świerklany<\/option>/);
   assert.match(html, /<option value="boguszowice">Boguszowice<\/option>/);
   assert.match(html, /<option value="północ">Rybnik-Północ<\/option>/);
-  assert.match(html, /🌱 Działki — Rybnik — wschód \(zjazd z A1\) \(<span class="viscount">0<\/span>\)/);
+  assert.match(html, /🌱 Działki — Rybnik — wschód \(zjazd z A1\) i Świerklany \(<span class="viscount">0<\/span>\)/);
 });
 
 test('renderCatalog: pasek filtrów i atrybuty data-title/data-dz', () => {

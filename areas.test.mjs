@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { REGIONS, RYBNIK_AREA, RYBNIK_OTODOM_SLUGS, inRybnikArea, DISTRICT_OPTIONS } from './areas.mjs';
+import { REGIONS, RYBNIK_AREA, RYBNIK_OTODOM_SLUGS, RYBNIK_OTODOM_LOCATIONS, inRybnikArea, DISTRICT_OPTIONS } from './areas.mjs';
 import { detectDistricts } from './dedup.mjs';
 
 test('REGIONS: Żory i Rybnik z krótką nazwą do powiadomień', () => {
@@ -28,6 +28,17 @@ test('inRybnikArea: N-O.pl i OLX — dzielnica z bloku śledzącego albo z tekst
   assert.ok(!inRybnikArea({ place: 'Rybnik, Gruntowa', title: 'Sprzedam działkę Rybnik - 900 m²' }));
 });
 
+test('inRybnikArea: Świerklany z lokalizacji/tytułu, nie z opisu; Dolne odrzucone', () => {
+  assert.ok(inRybnikArea({ place: 'Świerklany', title: 'Działka budowlana' }));                              // OLX / Otodom
+  assert.ok(inRybnikArea({ place: 'Świerklany, Szeroka', title: 'Działka', desc: 'w Świerklanach Górnych' }));  // N-O.pl
+  assert.ok(inRybnikArea({ place: 'Rybnik', title: 'Dom pod Rybnikiem – Świerklany | 179 m²' }));
+  assert.ok(!inRybnikArea({ place: 'Świerklany', title: 'Dom Świerklany Dolne', desc: '' }));
+  assert.ok(!inRybnikArea({ place: 'Świerklany', title: 'Dom', desc: 'położony w Świerklanach Dolnych' }));
+  assert.ok(!inRybnikArea({ place: 'Rybnik', title: 'Działka', desc: '10 min do Świerklan' }));                // opis nie wystarcza
+  assert.ok(inRybnikArea({ place: 'Rybnik – Boguszowice Stare', title: 'Dom', desc: 'blisko Świerklan Dolnych' })); // dzielnica Rybnika ważniejsza
+  assert.ok(!inRybnikArea({ place: 'Jankowice', title: 'Działka budowlana w Jankowicach' }));                 // druga wieś gminy
+});
+
 test('RYBNIK_AREA i DISTRICT_OPTIONS: klucze zgodne z detectDistricts', () => {
   for (const key of RYBNIK_AREA) assert.ok(DISTRICT_OPTIONS.some(o => o.region === 'rybnik' && o.key === key), `brak opcji filtra dla ${key}`);
   for (const o of DISTRICT_OPTIONS) {
@@ -42,4 +53,10 @@ test('RYBNIK_OTODOM_SLUGS: slugi dzielnic Otodomu (podwójny myślnik tam, gdzie
   assert.ok(RYBNIK_OTODOM_SLUGS.includes('boguszowice--osiedle'));
   assert.ok(RYBNIK_OTODOM_SLUGS.includes('ligocka-kuznia'));
   for (const s of RYBNIK_OTODOM_SLUGS) assert.match(s, /^[a-z-]+$/);
+});
+
+test('RYBNIK_OTODOM_LOCATIONS: dzielnice Rybnika + wieś Świerklany (nie gmina)', () => {
+  for (const s of RYBNIK_OTODOM_SLUGS) assert.ok(RYBNIK_OTODOM_LOCATIONS.includes('slaskie/rybnik/rybnik/rybnik/' + s));
+  assert.ok(RYBNIK_OTODOM_LOCATIONS.includes('slaskie/rybnicki/swierklany/swierklany'));
+  assert.equal(RYBNIK_OTODOM_LOCATIONS.length, RYBNIK_OTODOM_SLUGS.length + 1);
 });
