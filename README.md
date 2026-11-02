@@ -1,12 +1,12 @@
-# zory-monitor — monitoring działek i domów w Żorach, wschodnim Rybniku i Świerklanach
+# zory-monitor — monitoring działek i domów w Żorach, wschodnim Rybniku, Świerklanach i Nieborowicach
 
 Skrypt sprawdza nowe ogłoszenia sprzedaży **działek i domów** w Żorach oraz we wschodnich
-dzielnicach Rybnika od strony A1 oraz w Świerklanach na **OLX**, **Otodom** i **Nieruchomosci-online.pl** i przy
+dzielnicach Rybnika od strony A1, w Świerklanach oraz w Nieborowicach na **OLX**, **Otodom** i **Nieruchomosci-online.pl** i przy
 nowych ofertach pokazuje powiadomienie Windows (kliknięcie otwiera `report.html`).
 
 ## Obszary
 
-Dwa regiony liczone osobno (własne mediany, trend, sekcje raportu, powiadomienia „Żory: … · Rybnik: …"):
+Trzy regiony liczone osobno (własne mediany, trend, sekcje raportu, powiadomienia „Żory: … · Rybnik: … · Nieborowice: …"):
 
 - **Żory** — całe miasto (jak dotąd).
 - **Rybnik — wschód (zjazd z A1) i Świerklany** — tylko dzielnice: Rybnik-Północ, Boguszowice (Stare, Osiedle,
@@ -14,6 +14,8 @@ Dwa regiony liczone osobno (własne mediany, trend, sekcje raportu, powiadomieni
   „Świerklany"). Lista w `areas.mjs` (`RYBNIK_AREA` + ścieżki Otodomu `RYBNIK_OTODOM_LOCATIONS`), wzorce nazw
   w `DISTRICT_PATTERNS` w `dedup.mjs`. Świerklany Górne i Dolne są od 2024 jedną wsią i portale ich nie
   rozróżniają — bierzemy całe Świerklany, odrzucając tylko oferty wprost opisane jako Dolne.
+- **Nieborowice** — cała wieś (gmina Pilchowice); własne listy OLX, Otodomu (slug wsi) i N-O.pl, bez filtra
+  dzielnic. Nowy region = wpis w `REGIONS` (`areas.mjs`) + własne kategorie w `CATS` (`monitor.mjs`).
 
 Jak portale są zawężane do dzielnic: Otodom — jedno zapytanie „wiele lokalizacji" po slugach
 dzielnic (zły slug = 404 całego zapytania; paginacja tylko do `totalPages`, bo dalej portal zwraca

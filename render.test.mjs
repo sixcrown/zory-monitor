@@ -120,6 +120,18 @@ test('renderCatalog: optgroup dzielnic per region, nagłówek sekcji z regionem'
   assert.match(html, /🌱 Działki — Rybnik — wschód \(zjazd z A1\) i Świerklany \(<span class="viscount">0<\/span>\)/);
 });
 
+test('trzeci region Nieborowice: sekcja po Rybniku, wpis w pasku, nagłówek katalogu, bez grupy w filtrze', () => {
+  const C3 = { ...CATS, dzialki_nieborowice: { region: 'nieborowice', label: 'Działki', icon: '🌱', questions: [] } };
+  const html = renderReport(C3, [], STATS, {});
+  assert.match(html, /<h2 class="region" id="region-nieborowice">Nieborowice<\/h2>/);
+  assert.ok(html.indexOf('id="region-rybnik"') < html.indexOf('id="region-nieborowice"'));
+  assert.match(html, /<a href="#region-nieborowice"><b>Nieborowice<\/b><\/a> <a href="#cat-dzialki_nieborowice">/);
+  const cat = renderCatalog(C3, { dzialki_nieborowice: [{ ...OFERTA, id: 'x', cat: 'dzialki_nieborowice', place: 'Nieborowice' }] }, STATS);
+  assert.match(cat, /🌱 Działki — Nieborowice \(<span class="viscount">1<\/span>\)/);
+  assert.doesNotMatch(cat, /<optgroup label="Nieborowice">/); // wieś bez dzielnic — bez grupy w filtrze
+  assert.match(cat, /data-dz="[^"]*\bnieborowice\b/); // obok „rogoźna" z tytułu oferty testowej
+});
+
 test('renderCatalog: pasek filtrów i atrybuty data-title/data-dz', () => {
   const html = renderCatalog(CATS, { dzialki: [OFERTA], domy: [] }, STATS);
   assert.match(html, /id="f-q"/);

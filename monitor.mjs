@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { renderReport, renderCatalog, zl } from './render.mjs';
 import { groupOffers, median, detectDisappearances, detectDistricts } from './dedup.mjs';
 import { REGIONS, RYBNIK_OTODOM_LOCATIONS, inRybnikArea } from './areas.mjs';
-import { parseNoDistricts, otodomPlace } from './parse.mjs';
+import { parseNoDistricts, otodomPlace, otodomDedupItems, otodomKey, otodomCreated } from './parse.mjs';
 import { olxUrls, noSources, sourceHash } from './sources.mjs';
 
 const DRY = process.argv.includes('--dry-run');
@@ -61,12 +61,15 @@ const QUESTIONS = {
 };
 
 const OLX_URL = (kind, city) => `https://www.olx.pl/nieruchomosci/${kind}/sprzedaz/${city}/?search%5Border%5D=created_at%3Adesc`;
+// Otodom: lista jednej lokalizacji (ścieżka wojewodztwo/powiat/gmina/miejscowość lub miasto×3)
+const OTODOM_URL = (estate, loc) => `https://www.otodom.pl/pl/wyniki/sprzedaz/${estate}/${loc}?by=LATEST&direction=DESC`;
 // Otodom: jedno zapytanie na wiele lokalizacji naraz (ścieżki w areas.mjs); zła ścieżka = HTTP 404
 const OTODOM_RYBNIK_URL = estate => 'https://www.otodom.pl/pl/wyniki/sprzedaz/' + estate + '/wiele-lokalizacji?locations='
   + encodeURIComponent('[' + RYBNIK_OTODOM_LOCATIONS.join(',') + ']')
   + '&by=LATEST&direction=DESC';
-// N-O.pl zna tylko wieś „Świerklany" (bez podziału na Górne/Dolne); lista bez id miejscowości
-const NO_SWIERKLANY_URL = kind => `https://swierklany.nieruchomosci-online.pl/szukaj.html?3,${kind},sprzedaz,,%C5%9Awierklany`;
+// N-O.pl: lista miejscowości = subdomena + nazwa (Żory potrzebują id „:359", wsie i Rybnik nie).
+// Portal zna tylko wieś „Świerklany" (bez podziału na Górne/Dolne).
+const NO_URL = (kind, sub, name) => `https://${sub}.nieruchomosci-online.pl/szukaj.html?3,${kind},sprzedaz,,${name}`;
 
 // Kategoria = region × typ. Klucz trafia do state/history/archive/trend, więc nie zmieniać istniejących.
 // `keep` filtruje oferty po pobraniu (Rybnik: N-O.pl i OLX pobierają całe miasto, zostaje nasz obszar).
@@ -91,8 +94,8 @@ const CATS = {
     olx: [OLX_URL('dzialki', 'rybnik'), OLX_URL('dzialki', 'swierklany')],
     otodom: OTODOM_RYBNIK_URL('dzialka'), otodomPages: 3,
     no: [
-      { url: 'https://rybnik.nieruchomosci-online.pl/szukaj.html?3,dzialka,sprzedaz,,Rybnik', pages: 6, locality: /rybnik/i },
-      { url: NO_SWIERKLANY_URL('dzialka'), pages: 2, locality: /świerklany/i },
+      { url: NO_URL('dzialka', 'rybnik', 'Rybnik'), pages: 6, locality: /rybnik/i },
+      { url: NO_URL('dzialka', 'swierklany', '%C5%9Awierklany'), pages: 2, locality: /świerklany/i },
     ],
     keep: inRybnikArea,
     questions: QUESTIONS.dzialki,
@@ -102,10 +105,25 @@ const CATS = {
     olx: [OLX_URL('domy', 'rybnik'), OLX_URL('domy', 'swierklany')],
     otodom: OTODOM_RYBNIK_URL('dom'), otodomPages: 3,
     no: [
-      { url: 'https://rybnik.nieruchomosci-online.pl/szukaj.html?3,dom,sprzedaz,,Rybnik', pages: 5, locality: /rybnik/i },
-      { url: NO_SWIERKLANY_URL('dom'), pages: 2, locality: /świerklany/i },
+      { url: NO_URL('dom', 'rybnik', 'Rybnik'), pages: 5, locality: /rybnik/i },
+      { url: NO_URL('dom', 'swierklany', '%C5%9Awierklany'), pages: 2, locality: /świerklany/i },
     ],
     keep: inRybnikArea,
+    questions: QUESTIONS.domy,
+  },
+  // Nieborowice (gmina Pilchowice): cała wieś, listy portali są już zawężone — bez `keep`
+  dzialki_nieborowice: {
+    region: 'nieborowice', label: 'Działki', name: 'Działki Nieborowice', icon: '🌱',
+    olx: OLX_URL('dzialki', 'nieborowice'),
+    otodom: OTODOM_URL('dzialka', 'slaskie/gliwicki/pilchowice/nieborowice'),
+    no: NO_URL('dzialka', 'nieborowice', 'Nieborowice'), noPages: 2, noLocality: /nieborowice/i,
+    questions: QUESTIONS.dzialki,
+  },
+  domy_nieborowice: {
+    region: 'nieborowice', label: 'Domy', name: 'Domy Nieborowice', icon: '🏠',
+    olx: OLX_URL('domy', 'nieborowice'),
+    otodom: OTODOM_URL('dom', 'slaskie/gliwicki/pilchowice/nieborowice'),
+    no: NO_URL('dom', 'nieborowice', 'Nieborowice'), noPages: 2, noLocality: /nieborowice/i,
     questions: QUESTIONS.domy,
   },
 };
@@ -187,14 +205,14 @@ async function getOtodom(cat, url, maxPages = 1) {
     if (!m) throw new Error('Otodom: brak __NEXT_DATA__ (blokada albo zmiana struktury?)');
     const data = JSON.parse(m[1])?.props?.pageProps?.data?.searchAds;
     if (!Array.isArray(data?.items)) throw new Error('Otodom: brak listy ogłoszeń w danych (zmiana struktury?)');
-    items.push(...data.items);
+    items.push(...otodomDedupItems(data.items)); // bez „wyróżnionego" duplikatu z zaślepkowym id
     totalPages = Number(data.pagination?.totalPages) || 1;
   }
   return items.map(it => {
     const price = it.totalPrice?.value ?? null;
     const areaM2 = it.areaInSquareMeters ?? null;
     return {
-      id: 'oto-' + (it.id ?? it.slug),
+      id: 'oto-' + otodomKey(it),
       cat,
       portal: 'Otodom',
       title: it.title,
@@ -206,7 +224,7 @@ async function getOtodom(cat, url, maxPages = 1) {
       kind: '',
       place: otodomPlace(it.location, it.locationLabel?.value ?? ''),
       url: 'https://www.otodom.pl/pl/oferta/' + it.slug,
-      created: it.dateCreatedFirst || it.dateCreated || null,
+      created: otodomCreated(it),
     };
   });
 }

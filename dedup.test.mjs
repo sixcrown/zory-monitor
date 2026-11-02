@@ -175,3 +175,10 @@ test('detectDistricts: Świerklany z odmianą, Dolne osobno, Świerklaniec nie',
   assert.deepEqual([...detectDistricts('w Świerklanach Dolnych')], ['świerklany', 'świerklany-dolne']);
   assert.deepEqual([...detectDistricts('Świerklaniec, powiat tarnogórski')], []);
 });
+
+test('detectDistricts: Nieborowice z odmianą', () => {
+  assert.deepEqual([...detectDistricts('Nieborowice, Jagodowa')], ['nieborowice']);
+  assert.deepEqual([...detectDistricts('Działka przy ulicy Dębowej w Nieborowicach')], ['nieborowice']);
+  assert.deepEqual([...detectDistricts('15 min do Nieborowic')], ['nieborowice']);
+  assert.deepEqual([...detectDistricts('Pilchowice, ul. Główna')], []);
+});

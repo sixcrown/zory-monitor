@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { REGIONS, RYBNIK_AREA, RYBNIK_OTODOM_SLUGS, RYBNIK_OTODOM_LOCATIONS, inRybnikArea, DISTRICT_OPTIONS } from './areas.mjs';
 import { detectDistricts } from './dedup.mjs';
 
-test('REGIONS: Żory i Rybnik z krótką nazwą do powiadomień', () => {
-  assert.deepEqual(Object.keys(REGIONS), ['zory', 'rybnik']);
+test('REGIONS: Żory, Rybnik i Nieborowice z krótką nazwą do powiadomień', () => {
+  assert.deepEqual(Object.keys(REGIONS), ['zory', 'rybnik', 'nieborowice']); // klucze siedzą w stanie — nie zmieniać
   assert.equal(REGIONS.zory.short, 'Żory');
   assert.equal(REGIONS.rybnik.short, 'Rybnik');
-  assert.match(REGIONS.rybnik.label, /A1/);
+  assert.match(REGIONS.rybnik.label, /A1.*Świerklany/);
+  assert.equal(REGIONS.nieborowice.short, 'Nieborowice');
 });
 
 test('inRybnikArea: Otodom — dzielnica siedzi w place', () => {
@@ -39,6 +40,11 @@ test('inRybnikArea: Świerklany z lokalizacji/tytułu, nie z opisu; Dolne odrzuc
   assert.ok(!inRybnikArea({ place: 'Jankowice', title: 'Działka budowlana w Jankowicach' }));                 // druga wieś gminy
 });
 
+test('inRybnikArea: Nieborowice to osobny region — nie wchodzą do Rybnika', () => {
+  assert.ok(!inRybnikArea({ place: 'Nieborowice', title: 'Działka przy ścianie lasu' }));
+  assert.ok(!inRybnikArea({ place: 'Rybnik', title: 'Dom', desc: '15 min do Nieborowic' }));
+});
+
 test('RYBNIK_AREA i DISTRICT_OPTIONS: klucze zgodne z detectDistricts', () => {
   for (const key of RYBNIK_AREA) assert.ok(DISTRICT_OPTIONS.some(o => o.region === 'rybnik' && o.key === key), `brak opcji filtra dla ${key}`);
   for (const o of DISTRICT_OPTIONS) {
@@ -55,7 +61,7 @@ test('RYBNIK_OTODOM_SLUGS: slugi dzielnic Otodomu (podwójny myślnik tam, gdzie
   for (const s of RYBNIK_OTODOM_SLUGS) assert.match(s, /^[a-z-]+$/);
 });
 
-test('RYBNIK_OTODOM_LOCATIONS: dzielnice Rybnika + wieś Świerklany (nie gmina)', () => {
+test('RYBNIK_OTODOM_LOCATIONS: dzielnice Rybnika + wieś Świerklany (poziom wsi, nie gminy)', () => {
   for (const s of RYBNIK_OTODOM_SLUGS) assert.ok(RYBNIK_OTODOM_LOCATIONS.includes('slaskie/rybnik/rybnik/rybnik/' + s));
   assert.ok(RYBNIK_OTODOM_LOCATIONS.includes('slaskie/rybnicki/swierklany/swierklany'));
   assert.equal(RYBNIK_OTODOM_LOCATIONS.length, RYBNIK_OTODOM_SLUGS.length + 1);

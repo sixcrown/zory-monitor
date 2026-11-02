@@ -46,6 +46,8 @@ const DISTRICT_PATTERNS = [
   // rozróżniają już Górnych i Dolnych. Odmiana: Świerklan, Świerklanach; nie łapać Świerklańca.
   ['świerklany', /[śs]wierklan(?:y|ach|om|ami)?\b/],
   ['świerklany-dolne', /[śs]wierklan\w*\s+doln/],
+  // Nieborowice (gmina Pilchowice, przy węźle A1 „Knurów"); odmiana: Nieborowicach, Nieborowic
+  ['nieborowice', /nieborowic/],
 ];
 
 export function detectDistricts(text) {
